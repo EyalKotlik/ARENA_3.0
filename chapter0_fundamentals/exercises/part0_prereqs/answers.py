@@ -258,3 +258,25 @@ def cos_sim_matrix(matrix: Tensor) -> Tensor:
 matrix = t.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]]).float()
 expected = t.tensor([[1.0, 0.975, 0.959], [0.975, 1.0, 0.998], [0.959, 0.998, 1.0]])
 assert_all_close(cos_sim_matrix(matrix), expected)
+# %%
+# Exercise D
+def sample_distribution(probs: Tensor, n: int) -> Tensor:
+    """Return n random samples from probs, where probs is a normalized probability distribution.
+
+    probs: shape (k,) where probs[i] is the probability of event i occurring.
+    n: number of random samples
+
+    Return: shape (n,) where out[i] is an integer indicating which event was sampled.
+
+    Use t.rand and t.cumsum to do this without any explicit loops.
+    """
+    cum_probs = t.cumsum(probs,dim=0)
+    sample = einops.repeat(t.rand(n), "w -> w 6")
+    sample = einops.reduce(sample > cum_probs, " h w -> h","sum")
+    return sample
+    
+
+n = 5_000_000
+probs = t.tensor([0.05, 0.1, 0.1, 0.2, 0.15, 0.4])
+freqs = t.bincount(sample_distribution(probs, n)) / n
+assert_all_close(freqs, probs)
