@@ -158,7 +158,7 @@ def make_rays_2d(
     result[:, :, 1, 1:3] = coords
     print(result.shape)
     print(result)
-    result = einops.rearrange(result, "y z c d -> (y z) c d")
+    result = einops.rearrange(result, "y z c d -> (z y) c d")
     return result
     raise NotImplementedError()
 
@@ -311,14 +311,14 @@ def raytrace_mesh(
     solution = t.linalg.solve(matrix, vec)
     print(solution.shape)
     s, u, v = solution.unbind(dim=-1)
-    intersect = (s >= 0) & (u >= 0) & (v >= 0) & (u + v <= 1)
+    intersect = (s >= 0) & (u >= 0) & (v >= 0) & (u + v <= 1) & ~singulars
     distances = t.zeros(intersect.shape)
     distances[~intersect] = float('inf')
     distances[intersect] = s[intersect]
-    distances = distances.T.min(dim=1).values
+    distances = einops.reduce(distances, "nt nrays -> nrays", "min")
     print(distances.shape)
     # intersect = intersect & (solution[:,1]+solution[:,2]<=1) & ~singulars
-    return intersect.T
+    return distances
     raise NotImplementedError()
 
 
