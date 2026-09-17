@@ -217,7 +217,7 @@ assert label == label_batch[0].item()
 from tqdm.notebook import tqdm
 import time
 
-for i in tqdm(range(100)):
+for i in tqdm(range(1)):
     time.sleep(0.1)
 # %%
 word = "hello!"
@@ -225,7 +225,7 @@ pbar = tqdm(enumerate(word), total=len(word))
 t0 = time.time()
 
 for i, letter in pbar:
-    time.sleep(1.0)
+    time.sleep(0.1)
     pbar.set_postfix(i=i, letter=letter, time=f"{time.time()-t0:.3f}")
 # %%
 device = t.device(
@@ -384,9 +384,8 @@ def train(args: SimpleMLPTrainingArgs) -> tuple[list[float], list[float], Simple
                 imgs, labels = imgs.to(device), labels.to(device)
                 logits = model(imgs)
                 predictions = t.argmax(logits, dim=1)
-                batch_accuracy += t.sum(predictions == labels) / predictions.shape[0]
-            accuracy_list.append(batch_accuracy / args.batch_size)
-
+                batch_accuracy += t.sum(predictions == labels).item()
+            accuracy_list.append(batch_accuracy/ len(mnist_testset))
     return loss_list, accuracy_list, model
 
 
@@ -977,7 +976,7 @@ def train(args: ResNetTrainingArgs) -> tuple[list[float], list[float], ResNet34]
     """
     Performs feature extraction on ResNet, returning the model & lists of loss and accuracy.
     """
-    model = get_resnet_for_feature_extraction(10)
+    model = get_resnet_for_feature_extraction(10).to(device)
     cifar_trainset, cifar_testset = get_cifar_subset()
     cifar_trainloader = DataLoader(
         cifar_trainset, batch_size=args.batch_size, shuffle=True
@@ -987,9 +986,11 @@ def train(args: ResNetTrainingArgs) -> tuple[list[float], list[float], ResNet34]
     )
 
     optimizer = t.optim.Adam(model.parameters(), lr=args.learning_rate)
+    loss_list = []
+    accuracy_list = []
 
     for epoch in range(args.epochs):
-        pbar = tqdm(mnist_trainloader)
+        pbar = tqdm(cifar_trainloader)
 
         for imgs, labels in pbar:
             # Move data to device, perform forward pass
@@ -1008,12 +1009,13 @@ def train(args: ResNetTrainingArgs) -> tuple[list[float], list[float], ResNet34]
 
         with t.inference_mode():
             batch_accuracy = 0
-            for imgs, labels in mnist_testloader:
+            for imgs, labels in cifar_testloader:
                 imgs, labels = imgs.to(device), labels.to(device)
-                logits = model(imgs)
+                with t.inference_mode():
+                    logits = model(imgs)
                 predictions = t.argmax(logits, dim=1)
-                batch_accuracy += t.sum(predictions == labels) / predictions.shape[0]
-            accuracy_list.append(batch_accuracy / args.batch_size)
+                batch_accuracy += t.sum(predictions == labels).item()
+            accuracy_list.append(batch_accuracy/ len(cifar_testset))
 
     return loss_list, accuracy_list, model
     raise NotImplementedError()
@@ -1037,3 +1039,5 @@ line(
     title="ResNet Feature Extraction",
     width=800,
 )
+
+# %%
