@@ -600,7 +600,9 @@ print("Norms:")
 print(AB.norm())
 print(AB_factor.norm())
 
-print(f"Right dim: {AB_factor.rdim}, Left dim: {AB_factor.ldim}, Hidden dim: {AB_factor.mdim}")
+print(
+    f"Right dim: {AB_factor.rdim}, Left dim: {AB_factor.ldim}, Hidden dim: {AB_factor.mdim}"
+)
 # %%
 print("Eigenvalues:")
 print(t.linalg.eig(AB).eigenvalues)
@@ -619,7 +621,9 @@ ABC_factor = AB_factor @ C
 
 print(f"Unfactored: shape={ABC.shape}, norm={ABC.norm()}")
 print(f"Factored: shape={ABC_factor.shape}, norm={ABC_factor.norm()}")
-print(f"\nRight dim: {ABC_factor.rdim}, Left dim: {ABC_factor.ldim}, Hidden dim: {ABC_factor.mdim}")
+print(
+    f"\nRight dim: {ABC_factor.rdim}, Left dim: {ABC_factor.ldim}, Hidden dim: {ABC_factor.mdim}"
+)
 # %%
 AB_unfactored = AB_factor.AB
 t.testing.assert_close(AB_unfactored, AB)
@@ -628,7 +632,7 @@ head_index = 4
 layer = 1
 
 # YOUR CODE HERE - complete the `full_OV_circuit` object
-OV_circuit = FactoredMatrix(model.W_V[layer,head_index],model.W_O[layer,head_index])
+OV_circuit = FactoredMatrix(model.W_V[layer, head_index], model.W_O[layer, head_index])
 full_OV_circuit = model.W_E @ OV_circuit @ model.W_U
 
 tests.test_full_OV_circuit(full_OV_circuit, model, layer, head_index)
