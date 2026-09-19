@@ -216,7 +216,7 @@ ipython.run_line_magic("autoreload", "2")
 # IN_COLAB = "google.colab" in sys.modules
 
 # chapter = "chapter2_rl"
-# repo = "ARENA_3.0"
+# repo = "ARENA_materials"
 # branch = "main"
 
 # # Install dependencies
@@ -240,7 +240,7 @@ ipython.run_line_magic("autoreload", "2")
 #         %pip install jupyter ipython --upgrade
 
 #     if not os.path.exists(f"{root}/{chapter}"):
-#         !wget -P {root} https://github.com/callummcdougall/ARENA_3.0/archive/refs/heads/{branch}.zip
+#         !wget -P {root} https://github.com/ARENA-education/ARENA_materials/archive/refs/heads/{branch}.zip
 #         !unzip {root}/{branch}.zip '{repo}-{branch}/{chapter}/exercises/*' -d {root}
 #         !mv {root}/{repo}-{branch}/{chapter} {root}/{chapter}
 #         !rm {root}/{branch}.zip
@@ -314,6 +314,11 @@ for idx, probe in enumerate([Probe1, Probe2, Probe3, Probe4, Probe5]):
     gym.envs.registration.register(id=f"Probe{idx + 1}-v0", entry_point=probe)
 
 Arr = np.ndarray
+
+# The networks in this section are tiny, and if you train on the CPU with
+# PyTorch's default of one thread per core, threads spend longer
+# coordinating than computing. Adjust if needed.
+t.set_num_threads(min(4, t.get_num_threads()))
 
 device = t.device("mps" if t.backends.mps.is_available() else "cuda" if t.cuda.is_available() else "cpu")
 ENV_DICT = {"atari": AtariEnvs, "mujoco": BraxEnvs, "classic-control": CartPole, "swing-up": CartDoublePendulum,
@@ -2358,6 +2363,25 @@ r'''
 Once you've passed the tests for all 5 probe environments, you should test your model on Cartpole.
 
 See an example wandb run you should be getting [here](https://api.wandb.ai/links/callum-mcdougall/fdmhh8gq).
+
+<details>
+<summary> What's with the <code>t.set_num_threads</code> line in the setup code? </summary>
+
+Note that if you are training on the CPU (which for a network this small 
+can often be faster than the GPU!), having too many threads can slow training
+as the overhead between splitting the work over many threads can hurt.
+As such, we've added the line
+
+```python
+t.set_num_threads(min(4, t.get_num_threads()))
+```
+
+to the setup code, which caps the number of CPU threads PyTorch uses at 4 (and does nothing if
+you have fewer). Feel free to adjust it or remove it entirely.
+On a beefy machine with dozens of threads, I found a x10 slowdown if
+the number of threads were not capped.
+
+</details>
 '''
 
 # ! CELL TYPE: code
