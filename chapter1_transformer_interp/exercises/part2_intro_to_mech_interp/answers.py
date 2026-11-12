@@ -675,7 +675,7 @@ effective_OV_circuit = (
 )
 effective_OV_circuit = FactoredMatrix(effective_OV_circuit, model.W_U)
 effective_OV_circuit = model.W_E @ effective_OV_circuit
-print(f"top 1 acc effective OV circuit {top_1_acc(effective_OV_circuit1)}")
+print(f"top 1 acc effective OV circuit {top_1_acc(effective_OV_circuit)}")
 # %%
 layer = 0
 head_index = 7
@@ -903,4 +903,81 @@ tests.test_find_K_comp_full_circuit(find_K_comp_full_circuit, model)
 
 print(
     f"Token frac where max-activating key = same token: {top_1_acc(K_comp_circuit.T):.4f}"
+)
+
+
+# %%
+def get_comp_score(
+    W_A: Float[Tensor, "in_A out_A"], W_B: Float[Tensor, "out_A out_B"]
+) -> float:
+    """
+    Return the composition score between W_A and W_B.
+    """
+    return (
+        t.linalg.matrix_norm(W_A @ W_B, ord="fro")
+        / (t.linalg.matrix_norm(W_A, ord="fro") * t.linalg.matrix_norm(W_B, ord="fro"))
+    ).item()
+
+
+tests.test_get_comp_score(get_comp_score)
+# %%
+# Get all QK and OV matrices
+W_QK = model.W_Q @ model.W_K.transpose(-1, -2)
+W_OV = model.W_V @ model.W_O
+
+# Define tensors to hold the composition scores
+composition_scores = {
+    "Q": t.zeros(model.cfg.n_heads, model.cfg.n_heads).to(device),
+    "K": t.zeros(model.cfg.n_heads, model.cfg.n_heads).to(device),
+    "V": t.zeros(model.cfg.n_heads, model.cfg.n_heads).to(device),
+}
+
+# YOUR CODE HERE - fill in values of the `composition_scores` dict, using `get_comp_score`
+for i in tqdm(range(model.cfg.n_heads)):
+    for j in range(model.cfg.n_heads):
+        composition_scores["Q"][i, j] = get_comp_score(W_OV[0, i], W_QK[1, j])
+        composition_scores["K"][i, j] = get_comp_score(W_OV[0, i], W_QK[1, j].T)
+        composition_scores["V"][i, j] = get_comp_score(W_OV[0, i], W_OV[1, j])
+
+# Plot the composition scores
+for comp_type in ["Q", "K", "V"]:
+    plot_comp_scores(
+        model, composition_scores[comp_type], f"{comp_type} Composition Scores"
+    )
+
+
+# %%
+def generate_single_random_comp_score() -> float:
+    """
+    Write a function which generates a single composition score for random matrices
+    """
+    W_A_left = t.empty(model.cfg.d_model, model.cfg.d_head)
+    W_B_left = t.empty(model.cfg.d_model, model.cfg.d_head)
+    W_A_right = t.empty(model.cfg.d_model, model.cfg.d_head)
+    W_B_right = t.empty(model.cfg.d_model, model.cfg.d_head)
+
+    for W in [W_A_left, W_B_left, W_A_right, W_B_right]:
+        nn.init.kaiming_uniform_(W, a=np.sqrt(5))
+
+    W_A = W_A_left @ W_A_right.T
+    W_B = W_B_left @ W_B_right.T
+
+    return get_comp_score(W_A, W_B)
+
+
+
+n_samples = 300
+comp_scores_baseline = np.zeros(n_samples)
+for i in tqdm(range(n_samples)):
+    comp_scores_baseline[i] = generate_single_random_comp_score()
+
+print("\nMean:", comp_scores_baseline.mean())
+print("Std:", comp_scores_baseline.std())
+
+hist(
+    comp_scores_baseline,
+    nbins=50,
+    width=800,
+    labels={"x": "Composition score"},
+    title="Random composition scores",
 )
