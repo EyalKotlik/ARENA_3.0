@@ -112,5 +112,95 @@ datasets = {}
 for name in DATASET_NAMES:
     df = pd.read_csv(GOT_DATASETS / f"{name}.csv")
     datasets[name] = df
-    print(f"\n{name}: {len(df)} statements ({df['label'].sum()} true, {(1 - df['label']).sum():.0f} false)")
+    print(
+        f"\n{name}: {len(df)} statements ({df['label'].sum()} true, {(1 - df['label']).sum():.0f} false)"
+    )
     display(df.head(4))
+
+
+# %%
+def extract_activations(
+    statements: list[str],
+    model: AutoModelForCausalLM,
+    tokenizer: AutoTokenizer,
+    layers: list[int],
+    batch_size: int = 25,
+) -> dict[int, Float[Tensor, "n_statements d_model"]]:
+    """
+    Extract last-token hidden state activations from specified layers for a list of statements.
+
+    Args:
+        statements: List of text statements to process.
+        model: A HuggingFace causal language model.
+        tokenizer: The corresponding tokenizer.
+        layers: List of layer indices (0-indexed) to extract activations from.
+        batch_size: Number of statements to process at once.
+
+    Returns:
+        Dictionary mapping layer index to tensor of activations (on CPU, float32), shape [n_statements, d_model].
+    """
+    names = [get_act_name("resid_post", layer) for layer in layers]
+    activations = {layer: [] for layer in layers}
+    for i in range(0, len(statements), batch_size):
+        inputs = tokenizer(
+            statements[i : i + batch_size],
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=512,
+        ).to(model.device)
+        with t.no_grad():
+            _, cache = run_with_cache(
+                model,
+                inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                names_filter=names,
+                stop_at_layer=max(layers) + 1,
+            )
+        last_indices = inputs["attention_mask"].sum(dim=1) - 1
+        for layer in layers:
+            activations[layer].append(
+                cache["resid_post", layer][
+                    t.arange(len(last_indices), device=last_indices.device),
+                    last_indices,
+                    :,
+                ]
+                .cpu()
+                .float()
+            )
+    for layer in layers:
+        activations[layer] = t.cat(activations[layer])
+    return activations
+
+
+tests.test_extract_activations(
+    extract_activations, model, tokenizer, PROBE_LAYER, D_MODEL
+)
+# %%
+# Extract activations at the probe layer for all datasets
+activations = {}
+labels_dict = {}
+statements_dict = {}
+
+for name in DATASET_NAMES:
+    df = datasets[name]
+    statements = df["statement"].tolist()
+    labs = t.tensor(df["label"].values, dtype=t.float32)
+    statements_dict[name] = statements
+
+    acts = extract_activations(statements, model, tokenizer, [PROBE_LAYER])
+    activations[name] = acts[PROBE_LAYER]
+    labels_dict[name] = labs
+
+# Show summary table
+summary = pd.DataFrame(
+    {
+        "Dataset": DATASET_NAMES,
+        "N statements": [len(datasets[n]) for n in DATASET_NAMES],
+        "N true": [int(datasets[n]["label"].sum()) for n in DATASET_NAMES],
+        "N false": [int((1 - datasets[n]["label"]).sum()) for n in DATASET_NAMES],
+        "Act shape": [str(tuple(activations[n].shape)) for n in DATASET_NAMES],
+        "Mean norm": [f"{activations[n].norm(dim=-1).mean():.1f}" for n in DATASET_NAMES],
+    }
+)
+display(summary)
