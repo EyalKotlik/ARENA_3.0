@@ -5,6 +5,7 @@
 #   GITHUB_TOKEN            fine-grained token with access to MY_REPO only
 #   GIT_NAME, GIT_EMAIL     commit identity
 set -euo pipefail
+source /etc/profile.d/10-arena.sh 2>/dev/null || true
 source /etc/profile.d/20-pod-env.sh 2>/dev/null || true
 cd /root
 
@@ -29,6 +30,12 @@ if ! git -C ARENA_materials diff --quiet "$ARENA_BASE_COMMIT" HEAD -- requiremen
     echo "      Probably fine - rebuild the image if you hit import errors."
 fi
 
+# --- arena_lib: ARENA's shared helper package (repo root, not on PyPI) ---
+# Editable install, so `git pull` updates it with no reinstall. --no-deps: its pyproject
+# lists no dependencies, and this guarantees the locked image packages are never touched.
+uv pip install --python /opt/venv/bin/python --no-deps --quiet -e /root/ARENA_materials
+/opt/venv/bin/python -c "import arena_lib" && echo "arena_lib: OK"
+
 # --- your repo ---
 if [ -n "${MY_REPO:-}" ]; then
     name=$(basename "$MY_REPO" .git)
@@ -42,11 +49,13 @@ if [ -n "${MY_REPO:-}" ]; then
 fi
 
 # --- VS Code: interpreter + import paths for the exercise folders ---
+# Repo root is listed too: Pylance can't always follow setuptools' editable-install hook.
 mkdir -p /root/.vscode
 cat > /root/.vscode/settings.json <<JSON
 {
     "python.defaultInterpreterPath": "/opt/venv/bin/python",
     "python.analysis.extraPaths": [
+        "/root/ARENA_materials",
         "/root/ARENA_materials/chapter0_fundamentals/exercises",
         "/root/ARENA_materials/chapter1_transformer_interp/exercises",
         "/root/ARENA_materials/chapter2_rl/exercises",
@@ -55,6 +64,8 @@ cat > /root/.vscode/settings.json <<JSON
     ]
 }
 JSON
+
+[ -z "${HF_TOKEN:-}" ] && echo "WARNING: HF_TOKEN not set - gated models (Llama) won't download."
 
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader || true
 echo "Done. Open /root in VS Code (Remote-SSH)."
