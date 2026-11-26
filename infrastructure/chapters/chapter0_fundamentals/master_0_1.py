@@ -8,8 +8,8 @@ r'''
     {"title": "Rays & Segments", "icon": "1-circle-fill", "subtitle": "(20%)"},
     {"title": "Batched Operations", "icon": "2-circle-fill", "subtitle": "(25%)"},
     {"title": "Triangles", "icon": "3-circle-fill", "subtitle": "(35%)"},
-    {"title": "Video & Lighting", "icon": "4-circle-fill", "subtitle": "(30%)"},
-    {"title": "(Bonus) Debugging", "icon": "star", "subtitle": "(0%)"},   
+    {"title": "Video & Lighting", "icon": "4-circle-fill", "subtitle": "(20%)"},
+    {"title": "Bonus - Debugging", "icon": "star", "subtitle": ""},
 ]
 ```
 '''
@@ -27,7 +27,7 @@ r'''
 # ! TAGS: []
 
 r'''
-<img src="https://raw.githubusercontent.com/info-arena/ARENA_img/main/misc/headers/header-01.png" width="350">
+<img src="https://raw.githubusercontent.com/ARENA-education/ARENA_img/main/misc/headers/header-01.png" width="350">
 '''
 
 # ! CELL TYPE: markdown
@@ -118,67 +118,19 @@ ipython.run_line_magic("load_ext", "autoreload")
 ipython.run_line_magic("autoreload", "2")
 
 # ! CELL TYPE: code
-# ! FILTERS: [colab]
-# ! TAGS: [master-comment]
+# ! FILTERS: []
+# ! TAGS: []
 
-# import os
-# import sys
-# from pathlib import Path
+import arena_lib
 
-# IN_COLAB = "google.colab" in sys.modules
-
-# chapter = "chapter0_fundamentals"
-# repo = "ARENA_materials"
-# branch = "main"
-
-# # Install dependencies
-# try:
-#     import jaxtyping
-# except:
-#     %pip install jaxtyping einops
-
-# # `go.FigureWidget` (used in the interactive plots below) needs anywidget, which plotly doesn't
-# # install for you
-# try:
-#     import anywidget
-# except:
-#     %pip install anywidget
-
-# # Get root directory, handling 3 different cases: (1) Colab, (2) notebook not in ARENA repo, (3) notebook in ARENA repo
-# root = (
-#     "/content"
-#     if IN_COLAB
-#     else "/root"
-#     if repo not in os.getcwd()
-#     else str(next(p for p in Path.cwd().parents if p.name == repo))
-# )
-
-# if Path(root).exists() and not Path(f"{root}/{chapter}").exists():
-#     if not IN_COLAB:
-#         !sudo apt-get install unzip
-#         %pip install jupyter ipython --upgrade
-
-#     if not os.path.exists(f"{root}/{chapter}"):
-#         !wget -P {root} https://github.com/ARENA-education/ARENA_materials/archive/refs/heads/{branch}.zip
-#         !unzip {root}/{branch}.zip '{repo}-{branch}/{chapter}/exercises/*' -d {root}
-#         !mv {root}/{repo}-{branch}/{chapter} {root}/{chapter}
-#         !rm {root}/{branch}.zip
-#         !rmdir {root}/{repo}-{branch}
-
-
-# if f"{root}/{chapter}/exercises" not in sys.path:
-#     sys.path.append(f"{root}/{chapter}/exercises")
-
-# os.chdir(f"{root}/{chapter}/exercises")
+exercises_dir, section_dir = arena_lib.setup("0.1")
 
 # ! CELL TYPE: code
 # ! FILTERS: []
 # ! TAGS: []
 
 import os
-import sys
 from functools import partial
-from pathlib import Path
 from typing import Callable
 
 import einops
@@ -191,22 +143,13 @@ from jaxtyping import Bool, Float
 from torch import Tensor
 from tqdm.auto import tqdm
 
-# Make sure exercises are in the path
-chapter = "chapter0_fundamentals"
-section = "part1_ray_tracing"
-root_dir = next(p for p in Path.cwd().parents if (p / chapter).exists())
-exercises_dir = root_dir / chapter / "exercises"
-section_dir = exercises_dir / section
-if str(exercises_dir) not in sys.path:
-    sys.path.append(str(exercises_dir))
-
 import part1_ray_tracing.tests as tests
 from part1_ray_tracing.utils import (
     render_lines_with_plotly,
     setup_widget_fig_ray,
     setup_widget_fig_triangle,
 )
-from plotly_utils import imshow
+from arena_lib.plot import imshow
 
 MAIN = __name__ == "__main__"
 
@@ -286,7 +229,9 @@ We have no concept of lighting or color yet, so for now we'll say that a pixel o
 # ! TAGS: []
 
 r'''
-<img src="https://raw.githubusercontent.com/info-arena/ARENA_img/main/misc/ray_tracing.png" width="400">
+<img src="https://raw.githubusercontent.com/ARENA-education/ARENA_img/main/misc/ray_tracing.png" width="400">
+
+*(The sphere in this diagram is drawn with quadrilaterals rather than triangles, but any such mesh can be split into triangles by cutting each quadrilateral along a diagonal.)*
 '''
 
 # ! CELL TYPE: markdown
@@ -305,8 +250,8 @@ r'''
 ### Exercise - implement `make_rays_1d`
 
 > ```yaml
-> Difficulty: 🔴🔴⚪⚪⚪
-> Importance: 🔵🔵🔵⚪⚪
+> Difficulty: 2
+> Importance: 3
 > 
 > You should spend up to 10-15 minutes on this exercise.
 > ```
@@ -371,7 +316,7 @@ if MAIN:
 # ! TAGS: [html,st-dropdown[Click to see the expected output]]
 
 r'''
-<div style="text-align: left"><embed src="https://info-arena.github.io/ARENA_img/misc/media-01/0101.html" width="620" height="620"></div>
+<div style="text-align: left"><embed src="https://arena-education.github.io/ARENA_img/misc/media-01/0101.html" width="620" height="620"></div>
 '''
 
 # ! CELL TYPE: markdown
@@ -423,7 +368,7 @@ def update(v=0.0, seed=0):
 # ! TAGS: [html]
 
 r'''
-<div style="text-align: left"><embed src="https://info-arena.github.io/ARENA_img/misc/media-01/animation-1a.mp4" width="400" height="450" style="background-color: white;"></div>
+<div style="text-align: left"><embed src="https://arena-education.github.io/ARENA_img/misc/media-01/animation-1a.mp4" width="400" height="450" style="background-color: white;"></div>
 '''
 
 # ! CELL TYPE: markdown
@@ -448,8 +393,8 @@ r'''
 ### Exercise - implement `intersect_ray_1d`
 
 > ```yaml
-> Difficulty: 🔴🔴🔴⚪⚪
-> Importance: 🔵🔵🔵🔵⚪
+> Difficulty: 3
+> Importance: 4
 > 
 > You should spend up to 20-25 minutes on this exercise.
 > It involves some of today's core concepts - tensor manipulation, linear operations, etc.
@@ -489,7 +434,7 @@ Is it possible for the solve method to fail? Give a sample input where this woul
 <details>
 <summary>Answer - Failing Solve</summary>
 
-If the ray and segment are exactly parallel, then the solve will fail because there is no solution to the system of equations. For this function, handle this by catching the exception and returning False.
+If the ray and segment directions are parallel, then the matrix is singular and `torch.linalg.solve` fails because there is no unique solution. For distinct parallel lines there is no solution; for collinear lines there are infinitely many. A collinear ray and segment can overlap, but since segments are infinitely thin line segments, (length, but no width or depth) it would appear as an infinitesimally small point when viewed side on, and so we can treat them as invisible (i.e. as if there was no collision) if the ray and segment are collinear. 
 </details>
 '''
 
@@ -521,7 +466,7 @@ def intersect_ray_1d(ray: Float[Tensor, "points dims"], segment: Float[Tensor, "
     mat = t.stack([D, L_1 - L_2], dim=-1)
     vec = L_1 - O
 
-    # Solve equation (return False if no solution)
+    # Solve equation (return False if the matrix is singular, including collinear cases)
     try:
         sol = t.linalg.solve(mat, vec)
     except RuntimeError:
@@ -573,7 +518,7 @@ As well as simple objects, you can also typecheck iterables of objects, for exam
 - `list[int]` for a list of integers,
 - `dict[str, float]` for a dict mapping strings to floats,
 - `tuple[Tensor, Tensor]` for a length-2 tuple containing tensors,
-- `tuple[int, ...]` for a tuple containing one or more integers.
+- `tuple[int, ...]` for a tuple containing any number of integers.
 
 and you can also use other syntax to extend behaviour, e.g. `x: int | None` for a variable which can either be an integer or `None`.
 
@@ -628,7 +573,7 @@ A few important gotchas here:
 r'''
 ### Tip (2/5) - `einops`
 
-Einops is a useful library which we'll dive deeper with tomorrow. For now, the only important function you'll need to know is `einops.repeat`. This takes as arguments a tensor and a string, and returns a new tensor which has been repeated along the specified dimensions. For example, the following code shows how we can repeat a 2D tensor along the last dimension:
+Einops is a useful library which is covered in more depth in the [0.0] prerequisites material. For now, the only important function you'll need to know is `einops.repeat`. This takes as arguments a tensor and a string, and returns a new tensor which has been repeated along the specified dimensions. For example, the following code shows how we can repeat a 2D tensor along the last dimension:
 
 ```python
 x = t.randn(4, 3)
@@ -748,7 +693,7 @@ r'''
 
 We'll now move on to implementing a batched version of our previous function which takes multiple rays, multiple line segments, and returns a boolean for each ray indicating whether ***any*** segment intersects with that ray.
 
-Note - in the batched version, we don't want the solver to throw an exception just because some of the equations don't have a solution - these should just return False.
+Note - in the batched version, we don't want the solver to throw an exception just because some of the matrices are singular. As in the previous exercise, treat these pairs as non-intersections by returning `False`, including collinear overlaps.
 '''
 
 # ! CELL TYPE: markdown
@@ -759,20 +704,20 @@ r'''
 ### Exercise - implement `intersect_rays_1d`
 
 > ```yaml
-> Difficulty: 🔴🔴🔴🔴⚪
-> Importance: 🔵🔵🔵🔵⚪
+> Difficulty: 4
+> Importance: 4
 > 
 > You should spend up to 25-40 minutes on this exercise.
 > This will probably be one of the hardest exercises you'll complete today.
 > ```
 
-One part you might find difficult is dealing with the zero determinant cases. Previously we dealt with those by using `try / except`, but here we can't do that because we want to perform all the operations at once. Instead, we can use the following clever trick to find all the pairs of intersecting rays and segments:
+One part you might find difficult is dealing with the zero determinant cases. Previously we dealt with those by using `try / except`, but here we can't do that because we want to perform all the operations at once. Instead, we can use the following clever trick to find all the pairs of rays and segment that intersect uniquely at a valid point:
 
-1. Figure out which matrices have zero determinant (e.g. with `determinants.abs() < 1e-8`)
+1. Figure out which matrices have zero determinant (e.g. with `determinants.abs() < 1e-6`)
 2. Replace those matrices with the identity matrix `t.eye(2)`, since this will certainly not raise an error when solving
 3. Find the matrices s.t. `u, v` are in the required range **and** our original matrix was non-singular
 
-This way, we've identified all pairs of rays and segments where an intersection point exists **and** that intersection point is valid (i.e. it's actually on the positive side of the ray, and somewhere in the middle of the segment).
+This way, we've identified all pairs of rays and segments where an intersection point **exists**, is **unique**, and is **valid** (i.e. it's actually on the positive side of the ray (in the direction the camera is facing), and somewhere in the middle of the segment).
 
 Once we have this 2D array of booleans representing whether each ray intersects with each segment, we can reduce using the torch function `t.any` to find the rays which intersect *any* segment.
 '''
@@ -798,7 +743,7 @@ def intersect_rays_1d(
     rays = rays[..., :2]
     segments = segments[..., :2]
 
-    # Repeat rays and segments so that we can compuate the intersection of every (ray, segment) pair
+    # Repeat rays and segments so that we can compute the intersection of every (ray, segment) pair
     rays = einops.repeat(rays, "nrays p d -> nrays nsegments p d", nsegments=NS)
     segments = einops.repeat(segments, "nsegments p d -> nrays nsegments p d", nrays=NR)
 
@@ -816,7 +761,7 @@ def intersect_rays_1d(
     mat = t.stack([D, L_1 - L_2], dim=-1)
     # Get boolean of where matrix is singular, and replace it with the identity in these positions
     dets = t.linalg.det(mat)
-    is_singular = dets.abs() < 1e-8
+    is_singular = dets.abs() < 1e-6
     assert is_singular.shape == (NR, NS)
     mat[is_singular] = t.eye(2)
 
@@ -900,8 +845,8 @@ r'''
 ### Exercise - implement `make_rays_2d`
 
 > ```yaml
-> Difficulty: 🔴🔴🔴⚪⚪
-> Importance: 🔵🔵⚪⚪⚪
+> Difficulty: 3
+> Importance: 2
 > 
 > You should spend up to 10-20 minutes on this exercise.
 > ```
@@ -954,7 +899,7 @@ if MAIN:
 # ! TAGS: [html,st-dropdown[Click to see the expected output]]
 
 r'''
-<div style="text-align: left"><embed src="https://info-arena.github.io/ARENA_img/misc/media-01/0102.html" width="620" height="620"></div>
+<div style="text-align: left"><embed src="https://arena-education.github.io/ARENA_img/misc/media-01/0102.html" width="620" height="620"></div>
 '''
 
 # ! CELL TYPE: markdown
@@ -1038,7 +983,7 @@ def update(u=0.0, v=0.0):
 # ! TAGS: [html]
 
 r'''
-<div style="text-align: left"><embed src="https://info-arena.github.io/ARENA_img/misc/media-01/animation-1b.mp4" width="420" height="450" style="background-color: white;"></div>
+<div style="text-align: left"><embed src="https://arena-education.github.io/ARENA_img/misc/media-01/animation-1b.mp4" width="420" height="450" style="background-color: white;"></div>
 '''
 
 # ! CELL TYPE: markdown
@@ -1099,8 +1044,8 @@ r'''
 ### Exercise - implement `triangle_ray_intersects`
 
 > ```yaml
-> Difficulty: 🔴🔴🔴⚪⚪
-> Importance: 🔵🔵🔵⚪⚪
+> Difficulty: 3
+> Importance: 3
 > 
 > You should spend up to 15-20 minutes on this exercise.
 > ```
@@ -1195,11 +1140,11 @@ It's critical to know when you are making a copy of a `Tensor`, versus making a 
 r'''
 ### Storage Objects
 
-Calling `storage()` on a `Tensor` returns a Python object wrapping the underlying C++ array. This array is 1D regardless of the dimensionality of the `Tensor`. This allows you to look inside the `Tensor` abstraction and see how the actual data is laid out in RAM.
+Calling `untyped_storage()` on a `Tensor` returns a Python object wrapping the underlying C++ array (the older `storage()` method still works, but is deprecated and emits a warning). This array is 1D regardless of the dimensionality of the `Tensor`. This allows you to look inside the `Tensor` abstraction and see how the actual data is laid out in RAM.
 
-Note that a new Python wrapper object is generated each time you call `storage()`, and both `x.storage() == x.storage()` and `x.storage() is x.storage()` evaluates to False.
+Note that a new Python wrapper object is generated each time you call `untyped_storage()`, so `x.untyped_storage() is x.untyped_storage()` evaluates to False.
 
-If you want to check if two `Tensor`s share an underlying C++ array, you can compare their `storage().data_ptr()` fields. This can be useful for debugging.
+If you want to check if two `Tensor`s share an underlying C++ array, you can compare their `untyped_storage().data_ptr()` values. This can be useful for debugging.
 '''
 
 # ! CELL TYPE: markdown
@@ -1228,8 +1173,8 @@ r'''
 ### Exercise - implement `raytrace_triangle`
 
 > ```yaml
-> Difficulty: 🔴🔴🔴🔴⚪
-> Importance: 🔵🔵🔵🔵⚪
+> Difficulty: 4
+> Importance: 4
 > 
 > You should spend up to 15-20 minutes on this exercise.
 > This is about as hard as `intersect_rays_1d`, although hopefully you should find it more familiar.
@@ -1270,7 +1215,7 @@ def raytrace_triangle(
     # Note - this works because mat[is_singular] has shape (NR_where_singular, 3, 3), so we
     # can broadcast the identity matrix to that shape.
     dets: Float[Tensor, "NR"] = t.linalg.det(mat)
-    is_singular = dets.abs() < 1e-8
+    is_singular = dets.abs() < 1e-6
     mat[is_singular] = t.eye(3)
 
     # Define vector on the right hand side of equation
@@ -1314,7 +1259,7 @@ if MAIN:
     #     width=600,
     #     title="Triangle (as intersected by rays)",
     #     return_fig=True,
-    # ).write_html(str(section_dir / "0104.html"))
+    # ).write_html(str(section_dir / "0104.html"), include_plotlyjs="cdn")
     # END FILTERS
 # END HIDE
 
@@ -1323,8 +1268,8 @@ if MAIN:
 # ! TAGS: [html,st-dropdown[Click to see the expected output]]
 
 r'''
-<div style="text-align: left"><embed src="https://info-arena.github.io/ARENA_img/misc/media-01/0103.html" width="620" height="620"></div><br>
-<div style="text-align: left"><embed src="https://info-arena.github.io/ARENA_img/misc/media-01/0104.html" width="620" height="620"></div>
+<div style="text-align: left"><embed src="https://arena-education.github.io/ARENA_img/misc/media-01/0103.html" width="620" height="620"></div><br>
+<div style="text-align: left"><embed src="https://arena-education.github.io/ARENA_img/misc/media-01/0104.html" width="620" height="620"></div>
 '''
 
 # ! CELL TYPE: markdown
@@ -1365,8 +1310,8 @@ r'''
 ### Exercise - implement `raytrace_mesh`
 
 > ```yaml
-> Difficulty: 🔴🔴🔴⚪⚪
-> Importance: 🔵🔵🔵🔵⚪
+> Difficulty: 3
+> Importance: 4
 > 
 > You should spend up to 20-25 minutes on this exercise.
 > 
@@ -1410,21 +1355,21 @@ def raytrace_mesh(
     mat: Float[Tensor, "NR NT 3 3"] = t.stack([-D, B - A, C - A], dim=-1)
     # Get boolean of where matrix is singular, and replace it with the identity in these positions
     dets: Float[Tensor, "NR NT"] = t.linalg.det(mat)
-    is_singular = dets.abs() < 1e-8
+    is_singular = dets.abs() < 1e-6
     mat[is_singular] = t.eye(3)
 
     # Define vector on the right hand side of equation
     vec: Float[Tensor, "NR NT 3"] = O - A
 
-    # Solve eqns (note, s is the distance along ray)
+    # Solve eqns (note, s is the ray parameter, i.e. the intersection point is O + sD)
     sol: Float[Tensor, "NR NT 3"] = t.linalg.solve(mat, vec)
     s, u, v = sol.unbind(-1)
 
-    # Scale s by Dx to get the distance along ray
+    # Scale s by Dx to get the distance along the x-axis
     s *= D[..., 0]
 
     # Get boolean of intersects, and use it to set distance = infinity when there is no intersection
-    intersects = (u >= 0) & (v >= 0) & (u + v <= 1) & ~is_singular
+    intersects = (s >= 0) & (u >= 0) & (v >= 0) & (u + v <= 1) & ~is_singular
     s[~intersects] = float("inf")  # t.inf
 
     # Get the minimum distance (over all triangles) for each ray
@@ -1432,7 +1377,10 @@ def raytrace_mesh(
     # END SOLUTION
 
 
+# HIDE
 if MAIN:
+    tests.test_raytrace_mesh(raytrace_mesh)
+
     num_pixels_y = 120
     num_pixels_z = 120
     y_limit = z_limit = 1
@@ -1449,9 +1397,10 @@ if MAIN:
     for i, text in enumerate(["Intersects", "Distance"]):
         fig.layout.annotations[i]["text"] = text
     fig.show()
+# END HIDE
 
     # FILTERS: ~
-    # fig.write_html(str(section_dir / "0105.html"))
+    # fig.write_html(str(section_dir / "0105.html"), include_plotlyjs="cdn")
     # END FILTERS
 
 # ! CELL TYPE: markdown
@@ -1459,7 +1408,7 @@ if MAIN:
 # ! TAGS: [html,st-dropdown[Click to see the expected output]]
 
 r'''
-<iframe src="https://info-arena.github.io/ARENA_img/misc/media-01/0105.html" width="1020" height="620"></iframe>
+<iframe src="https://arena-education.github.io/ARENA_img/misc/media-01/0105.html" width="1020" height="620"></iframe>
 '''
 
 # ! CELL TYPE: markdown
@@ -1494,8 +1443,8 @@ r'''
 ### Exercise - rotation matrix
 
 > ```yaml
-> Difficulty: 🔴🔴⚪⚪⚪
-> Importance: 🔵🔵🔵⚪⚪
+> Difficulty: 2
+> Importance: 3
 > 
 > You should spend up to 10-15 minutes on this exercise.
 > ```
@@ -1556,6 +1505,8 @@ def raytrace_mesh_video(
     theta = t.tensor(2 * t.pi) / num_frames
     R = rotation_matrix(theta)
     for _ in tqdm(range(num_frames)):
+        # Points are row vectors, so `triangles @ R` applies R^T, i.e. it rotates clockwise rather than
+        # counterclockwise. That just reverses the direction of the spin, which doesn't matter here.
         triangles = triangles @ R
         result.append(raytrace_function(rays, triangles))
         t.cuda.empty_cache()  # clears GPU memory (this line will be more important later on!)
@@ -1592,7 +1543,7 @@ if MAIN:
     display_video(dists)
 
     # FILTERS: ~
-    # fig.write_html(str(section_dir / "0106.html"))
+    # fig.write_html(str(section_dir / "0106.html"), include_plotlyjs="cdn")
     # END FILTERS
 
 # ! CELL TYPE: markdown
@@ -1600,7 +1551,7 @@ if MAIN:
 # ! TAGS: [html,st-dropdown[Click to see the expected output]]
 
 r'''
-<div style="text-align: left"><embed src="https://info-arena.github.io/ARENA_img/misc/media-01/0106.html" width="570" height="620"></div>
+<div style="text-align: left"><embed src="https://arena-education.github.io/ARENA_img/misc/media-01/0106.html" width="570" height="620"></div>
 '''
 
 # ! CELL TYPE: markdown
@@ -1611,15 +1562,15 @@ r'''
 ### Exercise - use GPUs
 
 > ```yaml
-> Difficulty: 🔴⚪⚪⚪⚪
-> Importance: 🔵🔵🔵⚪⚪
+> Difficulty: 1
+> Importance: 3
 > 
 > You should spend up to 10-15 minutes on this exercise.
 > ```
 
-We'll discuss GPUs a lot more in later sections and exercises. One last thing to discuss before we move onto training our model: **GPUs**. Essentially, the GPU (graphics processing unit) is a specialized processor for rendering graphics and doing other kinds of parallel processing. Although we are actually using it for graphics in this section, it's much better known today for its role in deep learning, since it allows for efficient parallelized computations.
+We'll discuss GPUs a lot more in later sections and exercises. One last thing to discuss: **GPUs**. Essentially, the GPU (graphics processing unit) is a specialized processor for rendering graphics and doing other kinds of parallel processing. Although we are actually using it for graphics in this section, it's much better known today for its role in deep learning, since it allows for efficient parallelized computations.
 
-When you create a tensor, by default it's located on the CPU. You can use the `to` method to move your tensor between devices, e.g. `x = x.to("cuda")` to move to the GPU, and `x = x.to("cpu")` to move back to the CPU (or `x = x.cuda()` and `x = x.cpu()` as a shorthand). **CUDA** stands for Compute Unified Device Architecture, a parallel computing platform and programming model developed by NVIDIA which is supported by PyTorch. Note that this method returns a copy of the tensor rather than the tensor itself (unless the `to` command doesn't change its device). You can check whether CUDA is available by calling `t.cuda.is_available()` - if it's not, you can try installing a CUDA-supporting version of PyTorch from the [homepage](https://pytorch.org/).
+When you create a tensor, by default it's located on the CPU. You can use the `to` method to move your tensor between devices, e.g. `x = x.to("cuda")` to move to the GPU, and `x = x.to("cpu")` to move back to the CPU (or `x = x.cuda()` and `x = x.cpu()` as a shorthand). **CUDA** stands for Compute Unified Device Architecture, a parallel computing platform and programming model developed by NVIDIA which is supported by PyTorch. Note that this method returns a copy of the tensor rather than the tensor itself (unless the `to` command doesn't change its device). You can check whether CUDA is available by calling `t.cuda.is_available()` - if it's not, you can try installing a CUDA-supporting version of PyTorch from the [homepage](https://pytorch.org/). On an Apple Silicon Mac, the equivalent is the `"mps"` device (check with `t.backends.mps.is_available()`). If you have neither, the solution below falls back to the CPU, so it will still run (just more slowly).
 
 Below, you should write the `raytrace_mesh_gpu` function to be identical to `raytrace_mesh`, except that the computation should be done on the GPU. This means `triangles` and `rays` should be moved to the GPU before the computation is done, and the returned object should be moved back to the CPU before finishing.
 '''
@@ -1643,7 +1594,7 @@ def raytrace_mesh_gpu(
     # SOLUTION
     NR = rays.size(0)
     NT = triangles.size(0)
-    device = "cuda"
+    device = "cuda" if t.cuda.is_available() else "mps" if t.backends.mps.is_available() else "cpu"
     triangles = triangles.to(device)
     rays = rays.to(device)
 
@@ -1661,17 +1612,17 @@ def raytrace_mesh_gpu(
     mat: Float[Tensor, "NR NT 3 3"] = t.stack([-D, B - A, C - A], dim=-1)
     # Get boolean of where matrix is singular, and replace it with the identity in these positions
     dets: Float[Tensor, "NR NT"] = t.linalg.det(mat)
-    is_singular = dets.abs() < 1e-8
+    is_singular = dets.abs() < 1e-6
     mat[is_singular] = t.eye(3).to(device)
 
     # Define vector on the right hand side of equation
     vec: Float[Tensor, "NR NT 3"] = O - A
 
-    # Solve eqns (note, s is the distance along ray)
+    # Solve eqns (note, s is the ray parameter, i.e. the intersection point is O + sD)
     sol: Float[Tensor, "NR NT 3"] = t.linalg.solve(mat, vec)
     s, u, v = sol.unbind(-1)
 
-    # Scale s by Dx to get the distance along ray
+    # Scale s by Dx to get the distance along the x-axis
     s *= D[..., 0]
 
     # Get boolean of intersects, and use it to set distance = infinity when there is no intersection
@@ -1683,13 +1634,15 @@ def raytrace_mesh_gpu(
     # END SOLUTION
 
 
+# HIDE
 if MAIN:
     dists = raytrace_mesh_video(rays, triangles, rotation_matrix, raytrace_mesh_gpu, num_frames)
     dists = einops.rearrange(dists, "frames (y z) -> frames y z", y=num_pixels_y)
     display_video(dists)
+# END HIDE
 
     # FILTERS: ~
-    # fig.write_html(str(section_dir / "0107.html"))
+    # fig.write_html(str(section_dir / "0107.html"), include_plotlyjs="cdn")
     # END FILTERS
 
 # ! CELL TYPE: markdown
@@ -1697,7 +1650,7 @@ if MAIN:
 # ! TAGS: [html,st-dropdown[Click to see the expected output]]
 
 r'''
-<div style="text-align: left"><embed src="https://info-arena.github.io/ARENA_img/misc/media-01/0107.html" width="570" height="620"></div>
+<div style="text-align: left"><embed src="https://arena-education.github.io/ARENA_img/misc/media-01/0107.html" width="570" height="620"></div>
 '''
 
 # ! CELL TYPE: markdown
@@ -1708,8 +1661,8 @@ r'''
 ### Exercise (bonus) - add lighting
 
 > ```yaml
-> Difficulty: 🔴🔴🔴🔴🔴
-> Importance: 🔵🔵⚪⚪⚪
+> Difficulty: 5
+> Importance: 2
 > 
 > You've done all the essential content for today at this point.
 > You can complete this exercise for fun if you have time, or just read & run the solution!
@@ -1717,7 +1670,7 @@ r'''
 
 We can improve our images by adding lighting, i.e. coloring triangles based on the angle of some light source rather than just from distance from the origin. The most common way to do this is using the [Lambertian reflection model](https://en.wikipedia.org/wiki/Lambertian_reflectance), which says that the intensity of the light that reflects off a surface is proportional to the cosine of the angle between the light vector and the surface normal (or equivalently, proportional to their dot product, assuming both vectors are normalized).
 
-<img src="https://raw.githubusercontent.com/info-arena/ARENA_img/main/misc/raytracing-lighting-2.png" width="750">
+<img src="https://raw.githubusercontent.com/ARENA-education/ARENA_img/main/misc/raytracing-lighting-2.png" width="750">
 
 You should implement the `raytrace_mesh_lambert` function below, which puts this into practice. In other words, your function should return the following for each ray:
 
@@ -1784,17 +1737,17 @@ def raytrace_mesh_lambert(
     mat: Float[Tensor, "NR NT 3 3"] = t.stack([-D, B - A, C - A], dim=-1)
     # Get boolean of where matrix is singular, and replace it with the identity in these positions
     dets: Float[Tensor, "NR NT"] = t.linalg.det(mat)
-    is_singular = dets.abs() < 1e-8
+    is_singular = dets.abs() < 1e-6
     mat[is_singular] = t.eye(3).to(device)
 
     # Define vector on the right hand side of equation
     vec: Float[Tensor, "NR NT 3"] = O - A
 
-    # Solve eqns (note, s is the distance along ray)
+    # Solve eqns (note, s is the ray parameter, i.e. the intersection point is O + sD)
     sol: Float[Tensor, "NR NT 3"] = t.linalg.solve(mat, vec)
     s, u, v = sol.unbind(-1)  # each shape [NR, NT]
 
-    # Scale s by Dx to get the distance along ray
+    # Scale s by Dx to get the distance along the x-axis
     s *= D[..., 0]
 
     # Get boolean of intersects, and use it to set distance = infinity when there is no intersection
@@ -1822,7 +1775,7 @@ def raytrace_mesh_lambert(
 
 def display_video_with_lighting(intensity: Float[Tensor, "frames y z"]):
     """
-    Displays video of raytracing results, using Plotly. `distances` is a tensor where the [i, y, z]
+    Displays video of raytracing results, using Plotly. `intensity` is a tensor where the [i, y, z]
     element is the lighting intensity based on the angle of light & the surface of the triangle
     which this ray hits first.
     """
@@ -1834,9 +1787,10 @@ def display_video_with_lighting(intensity: Float[Tensor, "frames y z"]):
     ).update_layout(coloraxis_showscale=False, width=550, height=600, title="Raytrace mesh video (lighting)").show()
 
 
+# HIDE
 if MAIN:
     ambient_intensity = 0.5
-    light = t.tensor([0.0, -1.0, 1.0])
+    light = t.tensor([0.0, -1.0, 1.0]) / 2**0.5  # normalized, so the Lambert intensity is at most 1
     raytrace_function = partial(
         raytrace_mesh_lambert,
         ambient_intensity=ambient_intensity,
@@ -1846,9 +1800,10 @@ if MAIN:
     intensity = raytrace_mesh_video(rays, triangles, rotation_matrix, raytrace_function, num_frames)
     intensity = einops.rearrange(intensity, "frames (y z) -> frames y z", y=num_pixels_y)
     display_video_with_lighting(intensity)
+# END HIDE
 
     # FILTERS: ~
-    # fig.write_html(str(section_dir / "0108.html"))
+    # fig.write_html(str(section_dir / "0108.html"), include_plotlyjs="cdn")
     # END FILTERS
 
 # ! CELL TYPE: markdown
@@ -1856,7 +1811,7 @@ if MAIN:
 # ! TAGS: [html,st-dropdown[Click to see the expected output]]
 
 r'''
-<div style="text-align: left"><embed src="https://info-arena.github.io/ARENA_img/misc/media-01/0108.html" width="570" height="620"></div>
+<div style="text-align: left"><embed src="https://arena-education.github.io/ARENA_img/misc/media-01/0108-v2.html" width="570" height="620"></div>
 '''
 
 # ! CELL TYPE: markdown
@@ -1890,7 +1845,7 @@ The `pikachu.stl` file stores triangles in a consistent orientation based on the
 # ! TAGS: []
 
 r'''
-As a final bonus exercise before we conclude, you can try rendering with a **wireframe**, i.e. only including the edges of the triangles rather than the full triangle. All you have to do here is change your `triangle_ray_intersects` function, so that it only detects intersection at a certain subset of the parameter values `u` and `v` (can you see how to do this?).
+As a final bonus exercise before we conclude, you can try rendering with a **wireframe**, i.e. only including the edges of the triangles rather than the full triangle. All you have to do here is change the intersection condition in your `raytrace_mesh` (or `raytrace_mesh_gpu`) function, so that it only detects intersection at a certain subset of the parameter values `u` and `v` (can you see how to do this?).
 '''
 
 # ! CELL TYPE: markdown
@@ -1914,13 +1869,13 @@ r'''
 # ! TAGS: []
 
 r'''
-To wrap up today, we're going to have a further discussion of **testing**. So far, our test functions have been pretty simple - we imported a test from the `part1_ray_tracing/tests.py` file, and ran it to compare our answers to the answers in `part1_ray_tracing/solutions.py`. This works perfectly fine, but there are other Python libraries which can make testing easier and more powerful. In particular, two such libraries are `unittest` and `pytest`. Both these libraries provide extensive features for modularizing and running test functions, and have nice integrations with VSCode. `unittest` is very powerful, but also has a steep learning curve and isn't worth the trouble of learning during a 6 week course. However, `pytest` is very useful and easy to learn, so we'll spend some time here discussing it.
+To wrap up today, we're going to have a further discussion of **testing**. So far, our test functions have been pretty simple - we imported a test from the `part1_ray_tracing/tests.py` file, and ran it to compare our answers to the answers in `part1_ray_tracing/solutions.py`. This works perfectly fine, but there are other Python libraries which can make testing easier and more powerful. In particular, two such libraries are `unittest` and `pytest`. Both these libraries provide extensive features for modularizing and running test functions, and have nice integrations with VSCode. `unittest` is very powerful, but also has a steep learning curve and isn't worth the trouble of learning during this course. However, `pytest` is very useful and easy to learn, so we'll spend some time here discussing it.
 
 The pytest framework makes it easy to write small, readable tests, and can scale to support complex functional testing for applications and libraries. Today we'll just discuss a few features which will be particularly useful for the kinds of tests we'll be writing, but you're welcome to explore more tests later on.
 
 *Important note - if you're working on Colab or a notebook for these exercises, your tests won't work, because in this setup we'll be importing answers from our test file, rather than importing tests from our answers file. For this reason, we won't be using pytest for the structured exercises in this course (in case anybody is following these exercises in a notebook), but you're strongly recommended to use pytest when you're working from `.py` files instead - which is strongly recommended during much of the bonus content.*
 
-First, look at `part1_ray_tracing/tests.py`. The tests in this file all follow a similar pattern: evaluate your function on some input, check it equals the solution. This is a clear sign that we can use modularization to simplify our code! Compare this file to `part1_ray_tracing/test_with_pytest.py`, which contains the same tests but refactored using pytest. The latter is clearly separated into three sections: one for library imports, one for defining the inputs we'll use for our test functions, and one where we define our test functions.
+First, look at `part1_ray_tracing/tests.py`. The tests in this file all follow a similar pattern: evaluate your function on some input, check it equals the solution. This is a clear sign that we can use modularization to simplify our code! Compare this file to `part1_ray_tracing/test_with_pytest.py`, which contains a few of the same tests but refactored using pytest. These tests import your functions from a module called `part1_ray_tracing/answers.py`, so to run them you should put your implementations of `intersect_ray_1d`, `intersect_rays_1d` and `triangle_ray_intersects` in that file (until it exists, the tests are skipped rather than failed). The pytest file is clearly separated into three sections: one for library imports, one for defining the inputs we'll use for our test functions, and one where we define our test functions.
 
 ### Parametrization
 
@@ -1955,7 +1910,7 @@ You can also add more complicated commands, like:
 
 2. **From your Python file**
 
-To do this, you need to call `pytest.main` (make sure this is wrapped in an `if MAIN` block). The first argument of this function is a list of args to `pytest`. This has analogous syntax to the command line option, for instance here are a few ways you can do this:
+To do this, you need to call `pytest.main` (make sure this is wrapped in an `if MAIN` block). The first argument of this function is a list of args to `pytest`. This has analogous syntax to the command line option, for instance here are a few ways you can do this (the paths here are relative to `chapter0_fundamentals/exercises`, so they assume you're running from that directory):
 
 ```python
 if MAIN:
@@ -2041,7 +1996,7 @@ at this point. I myself had not used the debugger since coding agents got good
 in late 2025, and would scarcely
 believe I would use it again to solve a problem a coding agent could not,
 as it can run and debug the code itself.
-None-the-less, we've included a older tutorial here should you be
+Nonetheless, we've included an older tutorial here should you be
 interested in learning the now broadly obsolete skill of how to debug by hand.
 
 -------------
@@ -2054,48 +2009,40 @@ To give you practice debugging using VSCode's built-in debugger\*, we've provide
 **If you're using Colab**, you'll have to use different strategies for debugging. See [this page](https://zohaib.me/debugging-in-google-collab-notebook/) for one suggested approach.
 '''
 
-# ! CELL TYPE: markdown
-# ! FILTERS: []
+# ! CELL TYPE: code
+# ! FILTERS: [ex,st]
 # ! TAGS: []
 
-r'''
-<details>
-<summary>Incorrect function</summary>
+# def raytrace_triangle_with_bug(
+#     rays: Float[Tensor, "nrays rayPoints=2 dims=3"],
+#     triangle: Float[Tensor, "trianglePoints=3 dims=3"]
+# ) -> Bool[Tensor, " nrays"]:
+#     """
+#     For each ray, return True if the triangle intersects that ray.
+#     """
+#     NR = rays.size[0]
 
-```python
-def raytrace_triangle_with_bug(
-    rays: Float[Tensor, "nrays rayPoints=2 dims=3"],
-    triangle: Float[Tensor, "trianglePoints=3 dims=3"]
-) -> Bool[Tensor, " nrays"]:
-    \'\'\'
-    For each ray, return True if the triangle intersects that ray.
-    \'\'\'
-    NR = rays.size[0]
+#     A, B, C = einops.repeat(triangle, "pts dims -> pts NR dims", NR=NR)
 
-    A, B, C = einops.repeat(triangle, "pts dims -> pts NR dims", NR=NR)
+#     O, D = rays.unbind(-1)
 
-    O, D = rays.unbind(-1)
+#     mat = t.stack([- D, B - A, C - A])
 
-    mat = t.stack([- D, B - A, C - A])
-    
-    dets = t.linalg.det(mat)
-    is_singular = dets.abs() < 1e-8
-    mat[is_singular] = t.eye(3)
+#     dets = t.linalg.det(mat)
+#     is_singular = dets.abs() < 1e-6
+#     mat[is_singular] = t.eye(3)
 
-    vec = O - A
+#     vec = O - A
 
-    sol = t.linalg.solve(mat, vec)
-    s, u, v = sol.unbind(dim=-1)
+#     sol = t.linalg.solve(mat, vec)
+#     s, u, v = sol.unbind(dim=-1)
 
-    return ((u >= 0) & (v >= 0) & (u + v <= 1) & ~is_singular)
+#     return ((u >= 0) & (v >= 0) & (u + v <= 1) & ~is_singular)
 
 
-intersects = raytrace_triangle_with_bug(rays2d, test_triangle)
-img = intersects.reshape(num_pixels_y, num_pixels_z).int()
-imshow(img, origin="lower", width=600, title="Triangle (as intersected by rays)")
-```
-</details>
-'''
+# intersects = raytrace_triangle_with_bug(rays2d, test_triangle)
+# img = intersects.reshape(num_pixels_y, num_pixels_z).int()
+# imshow(img, origin="lower", width=600, title="Triangle (as intersected by rays)")
 
 # ! CELL TYPE: markdown
 # ! FILTERS: []
@@ -2135,7 +2082,7 @@ NR = rays.size[0]
 
 
 <details>
-<summary> Bug 1 Explination </summary>
+<summary> Bug 1 Explanation </summary>
 
 
 This should be `rays.size(0)` (or equivalently, `rays.shape[0]`). `size` is a method which takes an int and returns the size of that dimension; `shape` returns a `torch.Size` object which can be indexed into.
@@ -2153,7 +2100,7 @@ O, D = rays.unbind(-1)
 </details>
 
 <details>
-<summary> Bug 2 Explination </summary>
+<summary> Bug 2 Explanation </summary>
 
 We're unbinding from the wrong dimension. `rays` has shape `(nrays, points=2, dims=3)`, and we actually want to unbind along the `points` dimension. So we should use `rays.unbind(1)`.
 
@@ -2170,7 +2117,7 @@ mat = t.stack([- D, B - A, C - A])
 </details>
 
 <details>
-<summary> Bug 3 Explination </summary>
+<summary> Bug 3 Explanation </summary>
 
 This should have had the argument `dim=-1` on the end, because `torch.stack` by default stacks along the first dimension.
 
@@ -2188,7 +2135,7 @@ return ((u >= 0) & (v >= 0) & (u + v <= 1) & ~is_singular)
 </details>
 
 <details>
-<summary> Bug 4 Explination </summary>
+<summary> Bug 4 Explanation </summary>
 
 The final condition is also missing the check `s >= 0`, which checks that the 
 intersection is in the direction of travel of the ray from the origin towards 

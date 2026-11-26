@@ -1,11 +1,17 @@
 # %%
 
 
+import arena_lib
+
+exercises_dir, section_dir = arena_lib.setup("1.3.3")
+
+# %%
+
 import gc
 import itertools
 import os
 import random
-import sys
+import re
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -18,7 +24,6 @@ import plotly.express as px
 import requests
 import torch as t
 from datasets import load_dataset
-from dotenv import load_dotenv
 from huggingface_hub import hf_hub_download
 from IPython.display import HTML, IFrame, display
 from jaxtyping import Float, Int
@@ -49,20 +54,14 @@ def _get_hook_layer(sae: SAE) -> int:
     """Extract the layer number from an SAE's hook name (e.g. 'blocks.7.hook_resid_pre' → 7)."""
     return int(sae.cfg.metadata.hook_name.split(".")[1])
 
-
-# Make sure exercises are in the path
-chapter = "chapter1_transformer_interp"
-section = "part33_interp_with_saes"
-root_dir = next(p for p in Path.cwd().parents if (p / chapter).exists())
-exercises_dir = root_dir / chapter / "exercises"
-section_dir = exercises_dir / section
-if str(exercises_dir) not in sys.path:
-    sys.path.append(str(exercises_dir))
-
 import part33_interp_with_saes.tests as tests
 import part33_interp_with_saes.utils as utils
 
 MAIN = __name__ == "__main__"
+
+# LOW_GPU_MEM fires automatically on GPUs with less than 28 GiB (e.g. Colab's 16GB T4), or with no CUDA GPU at all.
+LOW_GPU_MEM = not t.cuda.is_available() or t.cuda.get_device_properties(0).total_memory / (1024**3) < 28
+print(f"{LOW_GPU_MEM=}" + (": gemma-2b-it in bfloat16, smaller sae_vis batches" if LOW_GPU_MEM else ""))
 
 # %%
 
@@ -317,13 +316,14 @@ def fetch_max_activating_examples(
 
     return sorted(data, key=lambda x: x[0], reverse=True)[:k]
 
+# %%
 
 if MAIN:
     # Fetch & display the results
     buffer = 10
     data = fetch_max_activating_examples(gpt2, gpt2_sae, gpt2_act_store, latent_idx=9, buffer=buffer, k=5)
     display_top_seqs(data)
-
+    
     # Test one of the results, to see if it matches the expected output
     first_seq_str_tokens = data[0][1]
     assert first_seq_str_tokens[buffer] == " new"
@@ -472,10 +472,11 @@ def get_autointerp_explanation(
     )
     return [choice.message.content for choice in result.choices]
 
+# %%
 
 if MAIN:
     API_KEY = os.environ.get("OPENAI_API_KEY", None)
-
+    
     if API_KEY is not None:
         completions = get_autointerp_explanation(gpt2, gpt2_sae, gpt2_act_store, latent_idx=9, n_completions=5)
         for i, completion in enumerate(completions):
@@ -603,6 +604,7 @@ def fetch_max_activating_examples_attn(
 
     return sorted(data, key=lambda x: x.act, reverse=True)[:k]
 
+# %%
 
 if MAIN:
     # Test your function: compare it to dashboard above
@@ -934,26 +936,34 @@ if MAIN:
         height=600,
     ).add_shape(
         type="line",
-        x0=attribution_values.min(),
-        x1=attribution_values.max(),
-        y0=attribution_values.min(),
-        y1=attribution_values.max(),
+        x0=attribution_values.min().item(),
+        x1=attribution_values.max().item(),
+        y0=attribution_values.min().item(),
+        y1=attribution_values.max().item(),
         line=dict(color="red", width=2, dash="dash"),
     ).show()
 
 # %%
 
 if MAIN:
-    load_dotenv()
-
     HF_TOKEN = os.getenv("HF_TOKEN")
-    assert HF_TOKEN, "Please set HF_TOKEN in your .env file"
+    assert HF_TOKEN, "HF_TOKEN isn't set: add it (see above), then re-run the setup cell at the top"
 
-    gemma_2_2b = HookedSAETransformer.from_pretrained("gemma-2-2b", device=device)
+    with utils.skip_noop_weight_processing():  # saves host RAM, same weights
+        gemma_2_2b = HookedSAETransformer.from_pretrained_no_processing(
+            "gemma-2-2b", device=device, dtype=t.bfloat16, n_ctx=1024
+        )
 
     gemmascope_sae_release = "gemma-scope-2b-pt-res-canonical"
     gemmascope_sae_id = "layer_20/width_16k/canonical"
     gemma_2_2b_sae = SAE.from_pretrained(gemmascope_sae_release, gemmascope_sae_id, device=str(device))
+
+# %%
+
+if MAIN:
+    latent_idx = 12082
+
+    display_dashboard(sae_release=gemmascope_sae_release, sae_id=gemmascope_sae_id, latent_idx=latent_idx)
 
 # %%
 
@@ -1006,6 +1016,7 @@ def generate_with_steering(
 
 if MAIN:
     prompt = "When I look at myself in the mirror, I see"
+    latent_idx = 12082
 
     no_steering_output = gemma_2_2b.generate(prompt, max_new_tokens=50, **GENERATE_KWARGS)
 
@@ -1180,23 +1191,11 @@ if MAIN:
 # %%
 
 def load_and_process_autointerp_dfs(width: int):
-    # Load in dataframe, from the gzipped JSONL files which Neuronpedia publishes in a public S3 bucket (see
-    # https://neuronpedia-datasets.s3.us-east-1.amazonaws.com/index.html?prefix=v1/ - there's one file per ~1024
-    # latents, so we list all the files for this SAE then download & concatenate them)
+    # Load in dataframe, from the gzipped JSONL files which Neuronpedia publishes in a public S3 bucket (one file per
+    # ~1024 latents, which this helper lists, downloads & concatenates; same as in `get_autointerp_df` earlier)
     release = get_pretrained_saes_directory()[sae_release]
     neuronpedia_id = release.neuronpedia_id[f"blocks.8.hook_resid_pre_{width}"]  # e.g. "gpt2-small/8-res_fs768-jb"
-    params = {"list-type": "2", "prefix": f"v1/{neuronpedia_id}/explanations/"}
-    listing = requests.get("https://neuronpedia-datasets.s3.us-east-1.amazonaws.com", params=params)
-    listing.raise_for_status()
-    keys = re.findall(r"<Key>(.*?)</Key>", listing.text)
-    assert len(keys) > 0, f"No explanations found on Neuronpedia for {neuronpedia_id!r}"
-    df = pd.concat(
-        [
-            pd.read_json(f"https://neuronpedia-datasets.s3.us-east-1.amazonaws.com/{key}", lines=True, compression="gzip")[["index", "description"]]
-            for key in tqdm(keys, desc=f"Downloading explanations for {width=}")
-        ],
-        ignore_index=True,
-    )
+    df = utils.load_neuronpedia_explanations(neuronpedia_id, ["index", "description"])
 
     # Drop duplicate latent descriptions
     df["index"] = df["index"].astype(int)
@@ -1220,7 +1219,10 @@ if MAIN:
 # %%
 
 import hdbscan
+import numba
 from umap import UMAP
+
+numba.config.THREADING_LAYER = "workqueue"
 
 
 def compute_sae_umap_data(
@@ -1309,7 +1311,7 @@ def compute_sae_umap_data(
         min_dist=min_dist_visual,
         metric="cosine",
     )
-    visual_umap_embedding = visual_umap.fit_transform(W_dec.detach().cpu())
+    visual_umap_embedding = visual_umap.fit_transform(W_dec.detach().cpu().numpy())
 
     umap_df[["umap_x", "umap_y"]] = visual_umap_embedding[:, :2]
 
@@ -1321,7 +1323,7 @@ def compute_sae_umap_data(
             min_dist=min_dist_cluster,
             metric="cosine",
         )
-        clustering_umap_embedding = clustering_umap.fit_transform(W_dec.detach().cpu())
+        clustering_umap_embedding = clustering_umap.fit_transform(W_dec.detach().cpu().numpy())
         clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size)
         clusterer.fit(clustering_umap_embedding)
 
@@ -1331,6 +1333,7 @@ def compute_sae_umap_data(
 
     return umap_df
 
+# %%
 
 if MAIN:
     # This took about 40s to run for me in Colab Pro+, 80s on my VastAI A100 remote machine
@@ -1773,7 +1776,29 @@ if MAIN:
 # %%
 
 if MAIN:
-    gemma_2b_it = HookedSAETransformer.from_pretrained("google/gemma-2b-it", device=device)
+    # Free Gemma-2-2B and its SAE (not used after the GemmaScope section) 
+    # before loading a second Gemma.
+    gemma_2_2b = gemma_2_2b_sae = None
+    gc.collect()
+    t.cuda.empty_cache()
+
+    if LOW_GPU_MEM:
+        # bfloat16 halves the memory (TransformerLens's weight processing would upcast it in host RAM, so skip it)
+        with utils.skip_noop_weight_processing():
+            gemma_2b_it = HookedSAETransformer.from_pretrained_no_processing(
+                "google/gemma-2b-it", device=device, dtype=t.bfloat16
+            )
+        # Make room: move GPT-2 and its SAEs to the CPU (section 3 does this anyway; they aren't used before then)
+        keep = {id(m) for m in gemma_2b_it.modules()}
+        for obj in gc.get_objects():
+            try:
+                if isinstance(obj, t.nn.Module) and id(obj) not in keep and utils.get_tensors_size(obj) / 1024**3 > 0.1:
+                    obj.cpu()
+            except Exception:
+                pass
+        t.cuda.empty_cache()
+    else:
+        gemma_2b_it = HookedSAETransformer.from_pretrained("google/gemma-2b-it", device=device)
 
     prompt = "\n".join(
         [
@@ -1791,6 +1816,36 @@ if MAIN:
 # %%
 
 if MAIN:
+    # Display all SAEs trained on the base gemma-2b model
+    metadata_rows = [
+        [data.model, data.release, data.repo_id, len(data.saes_map)]
+        for data in get_pretrained_saes_directory().values()
+        if data.model == "gemma-2b"
+    ]
+    print(
+        tabulate(
+            metadata_rows,
+            headers=["model", "release", "repo_id", "n_saes"],
+            tablefmt="simple_outline",
+        )
+    )
+
+    # Take a closer look at the SAE release we'll be using
+    sae_release = "gemma-2b-res-jb"
+    sae_id = "blocks.6.hook_resid_post"
+    release = get_pretrained_saes_directory()[sae_release]
+
+    print(
+        tabulate(
+            [[k, repr(v)] for k, v in release.__dict__.items() if k not in ["saes_map", "neuronpedia_id"]],
+            headers=["Field", "Value"],
+            tablefmt="simple_outline",
+        )
+    )
+
+# %%
+
+if MAIN:
     gemma_2b_sae = SAE.from_pretrained(sae_release, sae_id, device=str(device))
 
     print(
@@ -1800,6 +1855,12 @@ if MAIN:
             tablefmt="simple_outline",
         )
     )
+
+# %%
+
+if MAIN:
+    latent_idx = 607
+    display_dashboard(sae_release, sae_id, latent_idx)
 
 # %%
 
@@ -1819,7 +1880,7 @@ def hook_fn_patch_scoping(
     latent vector once, i.e. in the first forward pass.
     """
     if activations.shape[1] > 1:
-        activations[:, seq_pos] = latent_vector
+        activations[:, seq_pos] = latent_vector.to(activations.dtype)  # the model may be in bfloat16
 
 
 def generate_patch_scoping_explanation(
@@ -1868,6 +1929,10 @@ if MAIN:
         ]
     )
 
+    # `model.generate` decodes with skip_special_tokens=True, so its output doesn't contain the special tokens in
+    # `prompt` (e.g. <start_of_turn>, <unk>). Decode the prompt the same way to find where the model's answer starts.
+    prompt_decoded = gemma_2b_it.tokenizer.decode(gemma_2b_it.to_tokens(prompt)[0], skip_special_tokens=True)
+
     for scale in scale_list:
         output = generate_patch_scoping_explanation(
             gemma_2b_it,
@@ -1878,7 +1943,7 @@ if MAIN:
             scale,
             max_new_tokens=50,
         )
-        output_split = output.removeprefix(prompt).split('"')[0].strip().rstrip(".")
+        output_split = output.removeprefix(prompt_decoded).split('"')[0].strip().rstrip(".")
         print(f"scale {scale:02} | {output_split!r}")
 
 # %%
@@ -1917,7 +1982,7 @@ def get_patch_scoping_self_similarity(
             (diagnostic_hook_name, hook_fn_store_value),
         ],
     )
-    resid_post_final: Tensor = model.hook_dict[diagnostic_hook_name].ctx.pop("value")[0, -1]
+    resid_post_final: Tensor = model.hook_dict[diagnostic_hook_name].ctx.pop("value")[0, -1].float()  # if bfloat16
     resid_post_final_normalized = resid_post_final / resid_post_final.norm(dim=-1)
 
     self_similarity = latent_dir_normalized @ resid_post_final_normalized
@@ -2003,6 +2068,8 @@ if MAIN:
 
 if MAIN:
     # We start by emptying memory of all large tensors & objects (since we'll be loading in a lot of different models in the coming sections)
+    gemma_2b_it = gemma_2b_sae = None  # not used again; freeing them (rather than moving them to the CPU) saves host RAM
+    gc.collect()
     THRESHOLD = 0.1  # GB
     for obj in gc.get_objects():
         try:
@@ -2093,7 +2160,7 @@ if MAIN:
     # runner = SAETrainingRunner(cfg)
     # sae = runner.run()
     
-    hf_repo_id = "callummcdougall/arena-demos-tinystories"
+    hf_repo_id = "arena-education/arena-demos-tinystories"
     sae_id = cfg.hook_name
     
     # upload_saes_to_huggingface({sae_id: sae}, hf_repo_id=hf_repo_id)
@@ -2118,7 +2185,7 @@ if MAIN:
         sae=tinystories_sae,
         model=tinystories_model,
         tokens=tokens,
-        cfg=SaeVisConfig(features=range(16)),
+        cfg=SaeVisConfig(features=range(16), minibatch_size_tokens=16 if LOW_GPU_MEM else 64),
         verbose=True,
     )
     sae_vis_data.save_feature_centric_vis(
@@ -2203,7 +2270,7 @@ if MAIN:
     # runner = SAETrainingRunner(cfg)
     # sae = runner.run()
     
-    hf_repo_id = "callummcdougall/arena-demos-attn2l"
+    hf_repo_id = "arena-education/arena-demos-attn2l"
     sae_id = f"{cfg.hook_name}-v2"
     
     # upload_saes_to_huggingface({sae_id: sae}, hf_repo_id=hf_repo_id)
@@ -2227,7 +2294,9 @@ if MAIN:
     
     # Get a subset of live latents (probably not getting all of them, with only 100 seqs)
     acts_post_hook_name = f"{attn_sae.cfg.metadata.hook_name}.hook_sae_acts_post"
-    _, cache = attn_model.run_with_cache_with_saes(tokens[:100], saes=[attn_sae], names_filter=acts_post_hook_name)
+    _, cache = attn_model.run_with_cache_with_saes(
+        tokens[:100], saes=[attn_sae], names_filter=acts_post_hook_name, return_type=None
+    )
     acts = cache[acts_post_hook_name]
     alive_feats = (acts.flatten(0, 1) > 1e-8).any(dim=0).nonzero().squeeze().tolist()
     print(f"Alive latents: {len(alive_feats)}/{attn_sae.cfg.d_sae}\n")
@@ -2399,7 +2468,7 @@ if MAIN:
     # runner = SAETrainingRunner(cfg, override_dataset=override_dataset)
     # sae = runner.run()
     
-    hf_repo_id = "callummcdougall/arena-demos-othellogpt"
+    hf_repo_id = "arena-education/arena-demos-othellogpt"
     sae_id = f"{cfg.hook_name}-v1"
     
     # upload_saes_to_huggingface({sae_id: sae}, hf_repo_id=hf_repo_id)
@@ -2426,13 +2495,14 @@ def load_othello_vocab():
         "probes": vocab_dict_probes,
     }
 
+# %%
 
 if MAIN:
     othello_tokens = hf_othello_load("tokens.pt")
     othello_target_logits = hf_othello_load("target_logits.pt")
     othello_linear_probes = hf_othello_load("linear_probes.pt")
     print(f"{othello_tokens.shape=}")
-
+    
     # Get live features
     acts_post_hook_name = f"{othellogpt_sae.cfg.metadata.hook_name}.hook_sae_acts_post"
     _, cache = othellogpt.run_with_cache_with_saes(
@@ -2442,7 +2512,7 @@ if MAIN:
     alive_feats = (acts[:, 5:-5].flatten(0, 1) > 1e-8).any(dim=0).nonzero().squeeze().tolist()
     print(f"Alive features: {len(alive_feats)}/{othellogpt_sae.cfg.d_sae}\n")
     del cache
-
+    
     sae_vis_data = SaeVisData.create(
         sae=othellogpt_sae,
         model=othellogpt,

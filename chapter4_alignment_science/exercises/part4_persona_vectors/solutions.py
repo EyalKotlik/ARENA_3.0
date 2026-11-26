@@ -1,6 +1,12 @@
 # %%
 
 
+import arena_lib
+
+exercises_dir, section_dir = arena_lib.setup("4.4")
+
+# %%
+
 import gc
 import json
 import os
@@ -19,10 +25,9 @@ import pandas as pd
 import plotly.express as px
 import torch as t
 import torch.nn.functional as F
-from dotenv import load_dotenv
 from huggingface_hub import hf_hub_download, login, snapshot_download
 from IPython.display import HTML, display
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from openai import OpenAI
 from sklearn.decomposition import PCA
 from torch import Tensor
@@ -31,24 +36,41 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 t.set_grad_enabled(False)
 
-# Make sure exercises are in the path
-chapter = "chapter4_alignment_science"
-section = "part4_persona_vectors"
-root_dir = next(p for p in Path.cwd().parents if (p / chapter).exists())
-exercises_dir = root_dir / chapter / "exercises"
-section_dir = exercises_dir / section
-if str(exercises_dir) not in sys.path:
-    sys.path.append(str(exercises_dir))
-
 import part4_persona_vectors.tests as tests
 import part4_persona_vectors.utils as utils
+
+from arena_lib.huggingface import EarlyStopException, forward_to_layer
+from arena_lib.quant import has_native_bf16, quant_kwargs, set_4bit_compute_dtype
 
 warnings.filterwarnings("ignore")
 
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
 dtype = t.bfloat16
 
+# LOW_GPU_MEM fires automatically on GPUs with less than 20 GiB (e.g. Colab's 16GB T4), or with no CUDA GPU at all.
+GPU_GIB = t.cuda.get_device_properties(0).total_memory / 1024**3 if t.cuda.is_available() else 0.0
+LOW_GPU_MEM = GPU_GIB < 20
+print(f"GPU memory: {GPU_GIB:.1f} GiB, LOW_GPU_MEM = {LOW_GPU_MEM}")
+
 MAIN = __name__ == "__main__"
+
+
+def _return_layers(m) -> list:
+    """
+    Walk model attributes to locate the list of transformer blocks.
+
+    Handles different model architectures: some models nest the language model under
+    `model.language_model.layers` rather than the more common `model.layers`.
+    """
+    for attr_path in ("language_model.layers", "layers"):
+        obj = m.model
+        try:
+            for name in attr_path.split("."):
+                obj = getattr(obj, name)
+            return obj
+        except AttributeError:
+            continue
+    raise AttributeError(f"Could not find transformer layers on {type(m)}")
 
 
 def print_with_wrap(s: str, width: int = 80):
@@ -60,10 +82,9 @@ def print_with_wrap(s: str, width: int = 80):
 
 # %%
 
-assistant_axis_path = Path.cwd() / "assistant-axis"
-assert assistant_axis_path.exists(), "Please clone the assistant-axis repo (see instructions above)"
-
-transcript_dir = assistant_axis_path / "transcripts"
+# HF mirror of the transcripts from the assistant-axis repo (same paths as the original)
+transcripts_repo = snapshot_download("arena-education/4.4-assistant-axis-transcripts", repo_type="dataset")
+transcript_dir = Path(transcripts_repo) / "transcripts"
 case_study_files = sorted(transcript_dir.glob("case_studies/**/*.json"))
 drift_files = sorted(transcript_dir.glob("persona_drift/*.json"))
 print(f"Found {len(case_study_files)} case study transcripts, {len(drift_files)} persona drift transcripts")
@@ -78,13 +99,8 @@ for f in drift_files:
 
 # %%
 
-env_path = Path.cwd() / ".env"
-assert env_path.exists(), "Please create a .env file with your API keys"
-
-load_dotenv(dotenv_path=str(env_path))
-
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-assert OPENROUTER_API_KEY, "Please set OPENROUTER_API_KEY in your .env file"
+assert OPENROUTER_API_KEY, "OPENROUTER_API_KEY isn't set: add it (see above), then re-run the setup cell at the top"
 
 openrouter_client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
@@ -103,14 +119,33 @@ login(token=HF_TOKEN)
 
 MODEL_NAME = "google/gemma-2-27b-it"
 
+# Weight quantization (see the note above): None = full bf16 (needs ~80 GB); "quanto8" fits 32 GB, "nf4" 24 GB
+GPU_GB = t.cuda.get_device_properties(0).total_memory / 1e9 if t.cuda.is_available() else 0
+QUANT = None if GPU_GB > 70 else "quanto8" if GPU_GB > 30 else "nf4"
+if LOW_GPU_MEM:  # the 27B model doesn't fit 16 GB even in 4-bit, so use Gemma 2 9B in 8-bit
+    MODEL_NAME, QUANT = "google/gemma-2-9b-it", "quanto8"
+    print(f"LOW_GPU_MEM: using {MODEL_NAME} with QUANT={QUANT!r}")
+
+# "nf4" copies quantized in advance (identical weights, about a third of the download)
+PREQUANTIZED_NF4 = {
+    "google/gemma-2-27b-it": "arena-education/gemma-2-27b-it-bnb-4bit",
+    "Qwen/Qwen3-32B": "arena-education/Qwen3-32B-bnb-4bit",
+}
+
 if MAIN:
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    model_repo = PREQUANTIZED_NF4.get(MODEL_NAME, MODEL_NAME) if QUANT == "nf4" else MODEL_NAME
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
+        model_repo,
         dtype=dtype,
-        device_map="auto",
+        # A quantized model has to sit entirely on the GPU (quanto / bitsandbytes can't offload layers to CPU)
+        device_map="auto" if QUANT is None else "cuda",
         attn_implementation="eager",  # Required for Gemma 2 to access attention weights
+        # A pre-quantized repo carries its own quantization config
+        **({} if model_repo != MODEL_NAME else quant_kwargs(QUANT, dtype)),
     )
+    if QUANT == "nf4" and not has_native_bf16():
+        set_4bit_compute_dtype(model, t.float16)  # as for Qwen 2.5-7B in Section 3: emulated bfloat16 is slow
 
     NUM_LAYERS = model.config.num_hidden_layers
     D_MODEL = model.config.hidden_size
@@ -253,7 +288,7 @@ if MAIN:
 
 # GPT-4.1-mini is used as a fallback autorater for traits where Claude Haiku's content filters
 # trigger refusals (e.g. "evil", "hallucinating"). Used in run_trait_pipeline (Section 4).
-AUTORATER_MODEL = "anthropic/claude-3.5-haiku"
+AUTORATER_MODEL = "anthropic/claude-haiku-4.5"
 AUTORATER_MODEL_GPT = "openai/gpt-4.1-mini"
 
 JUDGE_PROMPT_TEMPLATE = """You are evaluating how well an AI model role-played as the character '{character}'.
@@ -420,8 +455,11 @@ def format_messages(messages: list[dict[str, str]], tokenizer) -> tuple[str, int
         messages[:-1], tokenize=False, add_generation_prompt=True
     ).rstrip()
 
-    # Get start idx for response (+1 to skip newline)
-    response_start_idx = tokenizer(prompt_without_response, return_tensors="pt").input_ids.shape[1] + 1
+    # Get start idx for response (+1 to skip newline). We use add_special_tokens=False because the chat template
+    # already includes any BOS token (e.g. Gemma's `<bos>`), so letting the tokenizer add another would double it
+    response_start_idx = (
+        tokenizer(prompt_without_response, return_tensors="pt", add_special_tokens=False).input_ids.shape[1] + 1
+    )
 
     return full_prompt, response_start_idx
 
@@ -459,15 +497,12 @@ def extract_response_activations(
         # Format the message
         full_prompt, response_start_idx = format_messages(messages, tokenizer)
 
-        # Tokenize
-        tokens = tokenizer(full_prompt, return_tensors="pt").to(model.device)
+        # Tokenize (the chat template already includes the BOS token, so don't add another)
+        tokens = tokenizer(full_prompt, return_tensors="pt", add_special_tokens=False).to(model.device)
 
-        # Forward pass with hidden state output
+        # Forward pass up to the specified layer (same as `model(..., output_hidden_states=True).hidden_states[layer]`)
         with t.inference_mode():
-            outputs = model(**tokens, output_hidden_states=True)
-
-        # Get hidden states at the specified layer
-        hidden_states = outputs.hidden_states[layer]  # (1, seq_len, hidden_size)
+            hidden_states = forward_to_layer(model, **tokens, stop_at_layer=layer)  # (1, seq_len, hidden_size)
 
         # Create mask for response tokens
         seq_len = hidden_states.shape[1]
@@ -875,24 +910,6 @@ if MAIN:
 
 # %%
 
-def _return_layers(m) -> list:
-    """
-    Walk model attributes to locate the list of transformer blocks.
-
-    Handles different model architectures: some models nest the language model under
-    `model.language_model.layers` rather than the more common `model.layers`.
-    """
-    for attr_path in ("language_model.layers", "layers"):
-        obj = m.model
-        try:
-            for name in attr_path.split("."):
-                obj = getattr(obj, name)
-            return obj
-        except AttributeError:
-            continue
-    raise AttributeError(f"Could not find transformer layers on {type(m)}")
-
-
 if MAIN:
     layers = _return_layers(model)
 
@@ -931,7 +948,7 @@ if MAIN:
 
     # Decode a few tokens from each span to verify correctness
     full_text = tokenizer.apply_chat_template(demo_messages, tokenize=False, add_generation_prompt=False)
-    token_ids = tokenizer(full_text, return_tensors="pt").input_ids[0]
+    token_ids = tokenizer(full_text, return_tensors="pt", add_special_tokens=False).input_ids[0]
     for i, (start, end) in enumerate(demo_spans):
         decoded = tokenizer.decode(token_ids[start : start + 10])
         print(f"  Turn {i} first ~10 tokens: {decoded!r}")
@@ -974,7 +991,7 @@ if MAIN:
     test_tokens = tokenizer(test_prompt, return_tensors="pt").to(model.device)
 
     def hook_fn(module, input, output):
-        print(f"Hook captured shape: {output[0].shape}")
+        print(f"Hook captured shape: {output.shape}")
 
     hook = _return_layers(model)[EXTRACTION_LAYER].register_forward_hook(hook_fn)
 
@@ -1023,19 +1040,22 @@ class ConversationAnalyzer:
 
         # Tokenize full conversation
         full_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-        tokens = self.tokenizer(full_prompt, return_tensors="pt").to(self.model.device)
+        tokens = self.tokenizer(full_prompt, return_tensors="pt", add_special_tokens=False).to(self.model.device)
 
         # Hook to capture hidden states
         captured: dict[str, Any] = {}
 
         def hook_fn(_, __, out):
             nonlocal captured
-            captured["hidden_states"] = out[0]
+            captured["hidden_states"] = out
+            raise EarlyStopException  # later layers (and the logits) aren't needed
 
         hook = _return_layers(self.model)[self.layer].register_forward_hook(hook_fn)
         try:
             with t.inference_mode():
                 _ = self.model(**tokens)
+        except EarlyStopException:
+            pass
         finally:
             hook.remove()
 
@@ -1336,17 +1356,17 @@ def generate_with_steering(
     messages = _normalize_messages(messages)
 
     formatted_prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    inputs = tokenizer(formatted_prompt, return_tensors="pt").to(model.device)
+    inputs = tokenizer(formatted_prompt, return_tensors="pt", add_special_tokens=False).to(model.device)
     prompt_length = inputs.input_ids.shape[1]
 
     steer_vec = steering_vector.to(model.device)
 
     def steering_hook(module, input, output):
-        hidden_states = output[0]
+        hidden_states = output
         # Steer ALL positions (not just last token) - this modifies the KV cache during
         # prefill, which has a much stronger effect than last-token-only steering.
         hidden_states += alpha * steer_vec.to(hidden_states.device, dtype=hidden_states.dtype)
-        return (hidden_states,) + output[1:]
+        return hidden_states
 
     hook_handle = _return_layers(model)[steering_layer].register_forward_hook(steering_hook)
     try:
@@ -1427,13 +1447,21 @@ if MAIN:
 # %%
 
 if MAIN:
-    # Free GPU memory from the Gemma model before loading Qwen 3 32B
-    try:
-        del model
-        t.cuda.empty_cache()
-        gc.collect()
-    except NameError:
-        pass
+    if LOW_GPU_MEM:
+        raise RuntimeError(
+            f"Activation capping needs a GPU with at least 24 GB of memory (this one has {GPU_GIB:.0f} GiB): the paper's "
+            "capping vectors exist only for Qwen 3 32B and Llama 3.3 70B, and Qwen 3 32B needs ~21 GiB even in 4-bit. "
+            "Skip ahead to Section 3."
+        )
+    # Free Gemma before loading Qwen (`layers` and `analyzer` also reference it)
+    for _name in ["model", "layers", "analyzer"]:
+        globals().pop(_name, None)
+    # A failed earlier cell's stored traceback (e.g. an autorater error) can still hold `analyzer`, and so Gemma
+    sys.last_traceback = sys.last_value = sys.last_type = sys.last_exc = None
+    if "get_ipython" in globals():
+        get_ipython().InteractiveTB.tb = None
+    gc.collect()
+    t.cuda.empty_cache()
 
 # %%
 
@@ -1446,20 +1474,22 @@ if MAIN:
     if qwen_tokenizer.pad_token is None:
         qwen_tokenizer.pad_token = qwen_tokenizer.eos_token
 
+    # Qwen 3 32B is ~64 GB in bf16, and even 8-bit needs ~32 GB for the weights alone, so quantize it to 4-bit
+    QWEN_QUANT = None if QUANT is None else "nf4"
+    qwen_repo = PREQUANTIZED_NF4[QWEN_MODEL_NAME] if QWEN_QUANT == "nf4" else QWEN_MODEL_NAME
     qwen_model = AutoModelForCausalLM.from_pretrained(
-        QWEN_MODEL_NAME,
-        device_map="auto",
+        qwen_repo,
+        device_map="auto" if QWEN_QUANT is None else "cuda",
         dtype=dtype,
+        **({} if qwen_repo != QWEN_MODEL_NAME else quant_kwargs(QWEN_QUANT, dtype)),
     )
+    if QWEN_QUANT == "nf4" and not has_native_bf16():
+        set_4bit_compute_dtype(qwen_model, t.float16)
 
     QWEN_NUM_LAYERS = qwen_model.config.num_hidden_layers
     QWEN_D_MODEL = qwen_model.config.hidden_size
 
 # %%
-
-sys.path.insert(0, str(exercises_dir / "assistant-axis"))
-
-from assistant_axis import load_axis, load_capping_config
 
 if MAIN:
     # Download axis and capping config from HuggingFace
@@ -1468,8 +1498,8 @@ if MAIN:
         repo_id=REPO_ID, filename=f"{QWEN_SHORT}/capping_config.pt", repo_type="dataset"
     )
 
-    qwen_axis = load_axis(axis_path)  # shape: (num_layers, d_model)
-    capping_config = load_capping_config(capping_config_path)
+    qwen_axis = utils.load_axis(axis_path)  # shape: (num_layers, d_model)
+    capping_config = utils.load_capping_config(capping_config_path)
 
     QWEN_TARGET_LAYER = 32  # For comparing capping vectors to the axis
 
@@ -1533,7 +1563,7 @@ def _generate_response_qwen(
 ) -> str:
     """Generate a response from Qwen 3, with thinking disabled."""
     prompt = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=False)
-    inputs = tok(prompt, return_tensors="pt").to(mdl.device)
+    inputs = tok(prompt, return_tensors="pt", add_special_tokens=False).to(mdl.device)
     input_length = inputs.input_ids.shape[1]
 
     with t.inference_mode():
@@ -1602,9 +1632,7 @@ class ActivationCapper:
         """
 
         def hook(module, input, output):
-            # Output is sometimes tuple of (hidden_states, ...), sometimes just hidden_states
-            is_tuple = isinstance(output, tuple)
-            hidden = output[0] if is_tuple else output  # (batch, seq_len, d_model)
+            hidden = output  # (batch, seq_len, d_model)
             v = vector.to(hidden.device, dtype=hidden.dtype)
             v = v / (v.norm() + 1e-8)
 
@@ -1612,8 +1640,6 @@ class ActivationCapper:
             excess = (proj - threshold).clamp(min=0.0)
             if excess.any():
                 hidden[0] -= excess.unsqueeze(-1) * v.unsqueeze(0)
-            if is_tuple:
-                return (hidden,) + output[1:]
             return hidden
 
         return hook
@@ -1686,11 +1712,11 @@ def _get_assistant_turn_spans(messages: list[dict[str, str]], tokenizer) -> list
         # Tokenize up to and including this turn
         prefix = messages[: i + 1]
         ids_with = tokenizer.apply_chat_template(
-            prefix, tokenize=True, add_generation_prompt=False, enable_thinking=False
+            prefix, tokenize=True, add_generation_prompt=False, enable_thinking=False, return_dict=False
         )
         # Tokenize up to but excluding this turn
         ids_without = tokenizer.apply_chat_template(
-            messages[:i], tokenize=True, add_generation_prompt=True, enable_thinking=False
+            messages[:i], tokenize=True, add_generation_prompt=True, enable_thinking=False, return_dict=False
         )
         spans.append((len(ids_without), len(ids_with)))
     return spans
@@ -1756,7 +1782,7 @@ def compute_turn_projections(
     """
     Compute the mean projection of each assistant turn onto a direction vector.
 
-    Uses `output_hidden_states=True` for reliable activation capture across multi-device configs.
+    Uses `forward_to_layer` (a hook that stops the forward pass early) to read the layer's output.
 
     Args:
         model: Language model.
@@ -1777,21 +1803,19 @@ def compute_turn_projections(
 
         # Tokenize prefix up to but not including this turn to find where it starts
         ids_without = tokenizer.apply_chat_template(
-            messages[:i], tokenize=True, add_generation_prompt=True, enable_thinking=False
+            messages[:i], tokenize=True, add_generation_prompt=True, enable_thinking=False, return_dict=False
         )
         # Tokenize prefix including this turn; also serves as the full forward-pass input
         ids_with = tokenizer.apply_chat_template(
-            messages[: i + 1], tokenize=True, add_generation_prompt=False, enable_thinking=False
+            messages[: i + 1], tokenize=True, add_generation_prompt=False, enable_thinking=False, return_dict=False
         )
         span_start, span_end = len(ids_without), len(ids_with)
 
         # Run forward pass on the full prefix up to and including this turn
         input_ids = t.tensor([ids_with], dtype=t.long).to(model.device)
         with t.inference_mode():
-            out = model(input_ids=input_ids, output_hidden_states=True)
-
-        # Extract hidden states at the target layer (layer 0 = embedding, so index layer+1)
-        hidden = out.hidden_states[layer + 1][0].float().cpu()  # (seq_len, d_model)
+            # Output of layers[layer], i.e. hidden_states[layer + 1] (hidden_states[0] is the embedding)
+            hidden = forward_to_layer(model, input_ids, stop_at_layer=layer + 1)[0].float().cpu()  # (seq_len, d_model)
 
         # Slice to this assistant turn's span and compute mean projection
         proj = (hidden[span_start:span_end] @ d).mean().item()
@@ -1841,18 +1865,17 @@ if MAIN:
 # %%
 
 if MAIN:
-    # Unload Gemma to free VRAM
-    try:
-        del model
-        t.cuda.empty_cache()
-        gc.collect()
-        print("Gemma model unloaded, CUDA cache cleared")
-    except NameError:
-        pass
+    # Unload the Section 1-2 models (Gemma 2 27B, Qwen 3 32B) and everything that references them, to free VRAM
+    for _name in ["model", "layers", "analyzer", "qwen_model"]:
+        globals().pop(_name, None)
+    gc.collect()
+    t.cuda.empty_cache()
+    print(f"Earlier models unloaded, {t.cuda.memory_allocated() / 2**30:.1f} GiB still allocated")
 
 # %%
 
 QWEN_SMALL_MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"
+QWEN_SMALL_QUANT = "nf4" if LOW_GPU_MEM else None  # bf16 weights alone are 14.2 GiB
 
 if MAIN:
     print(f"Loading {QWEN_SMALL_MODEL_NAME}...")
@@ -1860,7 +1883,12 @@ if MAIN:
     qwen_model_small = AutoModelForCausalLM.from_pretrained(
         QWEN_SMALL_MODEL_NAME,
         dtype=dtype,
-    ).to(device)
+        device_map=device,  # load straight to the GPU (via the CPU it needs ~15 GB of RAM)
+        **quant_kwargs(QWEN_SMALL_QUANT, dtype),
+    )
+    if QWEN_SMALL_QUANT == "nf4" and not has_native_bf16():
+        # Older GPUs such as Colab's T4 only emulate bfloat16, which is slow: the 4-bit layers compute in float16 there
+        set_4bit_compute_dtype(qwen_model_small, t.float16)
 
     QWEN_NUM_LAYERS = qwen_model_small.config.num_hidden_layers
     QWEN_D_MODEL = qwen_model_small.config.hidden_size
@@ -1903,36 +1931,47 @@ def extract_all_layer_activations_qwen(
             {"role": "assistant", "content": response},
         ]
         full_prompt, response_start_idx = format_messages(messages, tokenizer)
-        tokens = tokenizer(full_prompt, return_tensors="pt").to(model.device)
+        tokens = tokenizer(full_prompt, return_tensors="pt", add_special_tokens=False).to(model.device)
 
-        with t.inference_mode():
-            outputs = model(**tokens, output_hidden_states=True)
-
-        # outputs.hidden_states is a tuple of (num_layers+1) tensors (including embedding layer)
-        # We skip layer 0 (embedding) and use layers 1..num_layers, so we get the residual stream
-        # values at the end of each layer.
+        # Hooks take each layer's response-token mean, so we never hold all residual streams or compute logits
+        seq_len = tokens.input_ids.shape[1]
+        response_mask = t.arange(seq_len, device=model.device) >= response_start_idx
         layer_means = []
-        for layer_idx in range(1, num_layers + 1):
-            hidden_states = outputs.hidden_states[layer_idx]  # (1, seq_len, hidden_size)
-            seq_len = hidden_states.shape[1]
-            response_mask = t.arange(seq_len, device=hidden_states.device) >= response_start_idx
-            mean_activation = (hidden_states[0] * response_mask[:, None]).sum(0) / response_mask.sum()
-            layer_means.append(mean_activation.cpu())
+
+        def hook_fn(module, args, output, is_last=False):
+            hidden_states = output[0] if isinstance(output, tuple) else output  # (1, seq_len, hidden_size)
+            if is_last:
+                hidden_states = model.model.norm(hidden_states)
+            mask = response_mask.to(hidden_states.device)
+            layer_means.append(((hidden_states[0] * mask[:, None]).sum(0) / mask.sum()).cpu())
+            if is_last:
+                raise EarlyStopException
+
+        layers = _return_layers(model)
+        handles = [
+            layer.register_forward_hook(lambda m, a, o, last=(i == num_layers - 1): hook_fn(m, a, o, is_last=last))
+            for i, layer in enumerate(layers)
+        ]
+        try:
+            with t.inference_mode():
+                model(**tokens)
+        except EarlyStopException:
+            pass
+        finally:
+            for h in handles:
+                h.remove()
 
         all_activations.append(t.stack(layer_means))  # (num_layers, d_model)
-
-        del outputs
-        t.cuda.empty_cache()
 
     return t.stack(all_activations)  # (num_examples, num_layers, d_model)
 
 # %%
 
-# Path to the persona vectors trait data (sibling repo to assistant-axis)
-PERSONA_VECTORS_PATH = Path.cwd() / "persona_vectors"
-TRAIT_DATA_PATH = PERSONA_VECTORS_PATH / "data_generation" / "trait_data_extract"
-
 if MAIN:
+    # HF mirror of the trait data from the persona_vectors repo (same paths as the original)
+    PERSONA_VECTORS_PATH = Path(snapshot_download("arena-education/4.4-persona-vectors-trait-data", repo_type="dataset"))
+    TRAIT_DATA_PATH = PERSONA_VECTORS_PATH / "data_generation" / "trait_data_extract"
+
     # Load sycophancy trait data
     with open(TRAIT_DATA_PATH / "sycophantic.json", "r") as f:
         sycophantic_data = json.load(f)
@@ -2018,7 +2057,7 @@ def generate_contrastive_responses(
                     {"role": "user", "content": question},
                 ]
                 formatted = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-                inputs = tokenizer(formatted, return_tensors="pt").to(model.device)
+                inputs = tokenizer(formatted, return_tensors="pt", add_special_tokens=False).to(model.device)
                 prompt_length = inputs.input_ids.shape[1]
 
                 # Generate
@@ -2049,6 +2088,7 @@ def generate_contrastive_responses(
     pbar.close()
     return results
 
+# %%
 
 if MAIN:
     sycophantic_responses = generate_contrastive_responses(
@@ -2167,6 +2207,7 @@ def score_trait_response(
 
     return None
 
+# %%
 
 if MAIN:
     # Score all responses
@@ -2239,6 +2280,7 @@ def score_coherence(question: str, answer: str) -> int | None:
             return score
     return None
 
+# %%
 
 if MAIN:
     # Demo: score a few responses for coherence
@@ -2389,7 +2431,7 @@ if MAIN:
 
     # --- 2. Logit lens: unembed the sycophancy vector ---
     print("\nLogit lens: top tokens associated with the sycophancy direction...")
-    unembed = qwen_model_small.lm_head.weight.float().cpu()  # (vocab_size, d_model)
+    unembed = qwen_model_small.lm_head.weight.cpu().float()  # (vocab_size, d_model), fp32 on the CPU
     logits = unembed @ syc_vec.float()  # (vocab_size,)
 
     top_k = 20
@@ -2442,11 +2484,7 @@ class ActivationSteerer:
         """Add coeff * vector to hidden states according to the position mode."""
         steer = self.coeff * self.vector
 
-        # Extract hidden states - handle both tuple output (common) and plain tensor
-        if isinstance(output, tuple):
-            hidden_states = output[0]
-        else:
-            hidden_states = output
+        hidden_states = output  # (batch, seq_len, d_model)
 
         steer = steer.to(hidden_states.device, dtype=hidden_states.dtype)
 
@@ -2466,8 +2504,6 @@ class ActivationSteerer:
             # Only steer the last token position
             h[:, -1, :] += steer
 
-        if isinstance(output, tuple):
-            return (h,) + output[1:]
         return h
 
     def __enter__(self):
@@ -2489,18 +2525,18 @@ if MAIN:
     test_inputs = qwen_tokenizer(formatted, return_tensors="pt").to(qwen_model_small.device)
 
     # Get baseline hidden states
-    # The hook is on model.layers[STEER_LAYER], so its output is hidden_states[STEER_LAYER+1] = hidden_states[TRAIT_VECTOR_LAYER]
+    # The steering hook is on model.layers[STEER_LAYER]: read its output, hidden_states[STEER_LAYER + 1]
     with t.inference_mode():
-        baseline_out = qwen_model_small(**test_inputs, output_hidden_states=True)
-    baseline_hidden = baseline_out.hidden_states[STEER_LAYER + 1][0, -1].cpu()
+        baseline_out = forward_to_layer(qwen_model_small, **test_inputs, stop_at_layer=STEER_LAYER + 1)
+    baseline_hidden = baseline_out[0, -1].cpu()
 
     # Get steered hidden states
     test_vector = sycophantic_vectors[STEER_LAYER]  # 0-indexed: vectors[L] = output of model.layers[L]
     print(f"  Steering vector norm: {test_vector.norm().item():.2f}, layer={STEER_LAYER}")
     with ActivationSteerer(qwen_model_small, test_vector, coeff=1.0, layer=STEER_LAYER):
         with t.inference_mode():
-            steered_out = qwen_model_small(**test_inputs, output_hidden_states=True)
-    steered_hidden = steered_out.hidden_states[STEER_LAYER + 1][0, -1].cpu()
+            steered_out = forward_to_layer(qwen_model_small, **test_inputs, stop_at_layer=STEER_LAYER + 1)
+    steered_hidden = steered_out[0, -1].cpu()
 
     diff = (steered_hidden - baseline_hidden).norm().item()
     print(f'Difference with positions="all": {diff:.4f} (should be > 0)')
@@ -2509,25 +2545,25 @@ if MAIN:
     # Test 2: coeff=0 should match baseline
     with ActivationSteerer(qwen_model_small, test_vector, coeff=0.0, layer=STEER_LAYER):
         with t.inference_mode():
-            zero_out = qwen_model_small(**test_inputs, output_hidden_states=True)
-    zero_hidden = zero_out.hidden_states[STEER_LAYER + 1][0, -1].cpu()
+            zero_out = forward_to_layer(qwen_model_small, **test_inputs, stop_at_layer=STEER_LAYER + 1)
+    zero_hidden = zero_out[0, -1].cpu()
     zero_diff = (zero_hidden - baseline_hidden).norm().item()
     print(f"Difference with coeff=0: {zero_diff:.6f} (should be ~0)")
 
     # Test 3: Hook is removed after context manager exits
     with t.inference_mode():
-        after_out = qwen_model_small(**test_inputs, output_hidden_states=True)
-    after_hidden = after_out.hidden_states[STEER_LAYER + 1][0, -1].cpu()
+        after_out = forward_to_layer(qwen_model_small, **test_inputs, stop_at_layer=STEER_LAYER + 1)
+    after_hidden = after_out[0, -1].cpu()
     after_diff = (after_hidden - baseline_hidden).norm().item()
     print(f"Difference after context manager exit: {after_diff:.6f} (should be ~0)")
 
     # Test 4: positions="response" should only steer the last token
     with ActivationSteerer(qwen_model_small, test_vector, coeff=1.0, layer=STEER_LAYER, positions="response"):
         with t.inference_mode():
-            resp_out = qwen_model_small(**test_inputs, output_hidden_states=True)
-    resp_last = resp_out.hidden_states[STEER_LAYER + 1][0, -1].cpu()
-    resp_first = resp_out.hidden_states[STEER_LAYER + 1][0, 0].cpu()
-    baseline_first = baseline_out.hidden_states[STEER_LAYER + 1][0, 0].cpu()
+            resp_out = forward_to_layer(qwen_model_small, **test_inputs, stop_at_layer=STEER_LAYER + 1)
+    resp_last = resp_out[0, -1].cpu()
+    resp_first = resp_out[0, 0].cpu()
+    baseline_first = baseline_out[0, 0].cpu()
     resp_last_diff = (resp_last - baseline_hidden).norm().item()
     resp_first_diff = (resp_first - baseline_first).norm().item()
     print(
@@ -2539,8 +2575,8 @@ if MAIN:
     # Test 5: positions="prompt" should steer all tokens during prefill (seq_len > 1)
     with ActivationSteerer(qwen_model_small, test_vector, coeff=1.0, layer=STEER_LAYER, positions="prompt"):
         with t.inference_mode():
-            prompt_out = qwen_model_small(**test_inputs, output_hidden_states=True)
-    prompt_first = prompt_out.hidden_states[STEER_LAYER + 1][0, 0].cpu()
+            prompt_out = forward_to_layer(qwen_model_small, **test_inputs, stop_at_layer=STEER_LAYER + 1)
+    prompt_first = prompt_out[0, 0].cpu()
     prompt_first_diff = (prompt_first - baseline_first).norm().item()
     print(f'positions="prompt": first token diff={prompt_first_diff:.4f} (>0, steered during prefill)')
     assert prompt_first_diff > 0, "Prompt mode should steer all tokens during prefill"
@@ -2564,7 +2600,7 @@ def generate_with_steerer(
     """Generate a response with activation steering applied."""
     messages = [{"role": "user", "content": prompt}]
     formatted = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    inputs = tokenizer(formatted, return_tensors="pt").to(model.device)
+    inputs = tokenizer(formatted, return_tensors="pt", add_special_tokens=False).to(model.device)
     prompt_length = inputs.input_ids.shape[1]
 
     with ActivationSteerer(model, steering_vector, coeff=coeff, layer=layer):
@@ -2624,6 +2660,7 @@ def run_steering_experiment(
 
     return results
 
+# %%
 
 if MAIN:
     # Run the steering experiment
@@ -2710,6 +2747,7 @@ def compute_trait_projections(
 
     return projections.tolist()
 
+# %%
 
 if MAIN:
     # Compute projections for three conditions
@@ -2908,6 +2946,7 @@ def run_trait_pipeline(
 
     return trait_vectors, steering_results
 
+# %%
 
 if MAIN:
     # Run pipeline for additional traits

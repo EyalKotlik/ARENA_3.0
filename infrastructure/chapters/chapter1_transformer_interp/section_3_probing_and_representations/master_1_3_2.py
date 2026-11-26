@@ -35,7 +35,7 @@ r'''
 # ! TAGS: []
 
 r'''
-<img src="https://raw.githubusercontent.com/info-arena/ARENA_img/main/misc/headers/header-14-2.png" width="350">
+<img src="https://raw.githubusercontent.com/ARENA-education/ARENA_img/main/misc/headers/header-14-2.png" width="350">
 '''
 
 # ! CELL TYPE: markdown
@@ -144,52 +144,12 @@ ipython.run_line_magic("load_ext", "autoreload")
 ipython.run_line_magic("autoreload", "2")
 
 # ! CELL TYPE: code
-# ! FILTERS: [colab]
-# ! TAGS: [master-comment]
+# ! FILTERS: []
+# ! TAGS: []
 
-import os
-import sys
-from pathlib import Path
+import arena_lib
 
-IN_COLAB = "google.colab" in sys.modules
-
-chapter = "chapter1_transformer_interp"
-repo = "ARENA_materials"
-branch = "main"
-
-# # Install dependencies
-# try:
-#     import nnsight
-# except:
-#     %pip install openai>=1.56.2 nnsight einops jaxtyping plotly transformer_lens==2.17.0 git+https://github.com/callummcdougall/CircuitsVis.git#subdirectory=python gradio typing-extensions
-#     %pip install --upgrade pydantic
-
-# # Get root directory, handling 3 different cases: (1) Colab, (2) notebook not in ARENA repo, (3) notebook in ARENA repo
-root = (
-    "/content"
-    if IN_COLAB
-    else "/root"
-    if repo not in os.getcwd()
-    else str(next(p for p in Path.cwd().parents if p.name == repo))
-)
-
-# if Path(root).exists() and not Path(f"{root}/{chapter}").exists():
-#     if not IN_COLAB:
-#         !sudo apt-get install unzip
-#         %pip install jupyter ipython --upgrade
-
-#     if not os.path.exists(f"{root}/{chapter}"):
-#         !wget -P {root} https://github.com/ARENA-education/ARENA_materials/archive/refs/heads/{branch}.zip
-#         !unzip {root}/{branch}.zip '{repo}-{branch}/{chapter}/exercises/*' -d {root}
-#         !mv {root}/{repo}-{branch}/{chapter} {root}/{chapter}
-#         !rm {root}/{branch}.zip
-#         !rmdir {root}/{repo}-{branch}
-
-
-if f"{root}/{chapter}/exercises" not in sys.path:
-    sys.path.append(f"{root}/{chapter}/exercises")
-
-os.chdir(f"{root}/{chapter}/exercises")
+exercises_dir, section_dir = arena_lib.setup("1.3.2")
 
 # ! CELL TYPE: code
 # ! FILTERS: []
@@ -200,7 +160,6 @@ import os
 import sys
 import time
 from collections import defaultdict
-from pathlib import Path
 
 import circuitsvis as cv
 import einops
@@ -208,6 +167,7 @@ import numpy as np
 import torch as t
 from IPython.display import display
 from jaxtyping import Float
+import nnsight
 from nnsight import CONFIG, LanguageModel
 from openai import OpenAI
 from rich import print as rprint
@@ -220,20 +180,15 @@ logging.disable(sys.maxsize)
 t.set_grad_enabled(False)
 device = t.device("mps" if t.backends.mps.is_available() else "cuda" if t.cuda.is_available() else "cpu")
 
-# Make sure exercises are in the path
-chapter = "chapter1_transformer_interp"
-section = "part32_function_vectors_and_model_steering"
-root_dir = next(p for p in Path.cwd().parents if (p / chapter).exists())
-exercises_dir = root_dir / chapter / "exercises"
-section_dir = exercises_dir / section
-# FILTERS: ~colab
-if str(exercises_dir) not in sys.path:
-    sys.path.append(str(exercises_dir))
-# END FILTERS
+# The first time you call `.save()`, nnsight adds a `save` method to every Python object. If the OpenAI client's HTTP
+# library is first imported after that (i.e. when you first create a client later on), it fails with "TypeError:
+# Attribute 'save' is missing its type annotation". Creating a client now, before any nnsight trace, imports it early.
+# (This makes no API request, so any key works here.)
+OpenAI(api_key="not-used")
 
 import part32_function_vectors_and_model_steering.solutions as solutions
 import part32_function_vectors_and_model_steering.tests as tests
-from plotly_utils import imshow
+from arena_lib.plot import imshow
 
 MAIN = __name__ == "__main__"
 
@@ -262,7 +217,7 @@ Note that the status page sometimes takes ~5 minutes to load all live models - c
 <details>
 <summary>Example status page</summary>
 
-<img src="https://raw.githubusercontent.com/info-arena/ARENA_img/main/misc/ndif-status.png" width="650">
+<img src="https://raw.githubusercontent.com/ARENA-education/ARENA_img/main/misc/ndif-status.png" width="650">
 
 </details>
 '''
@@ -279,11 +234,22 @@ Here, we'll discuss some important syntax for interacting with `nnsight` models.
 ### Model config
 
 Each model comes with a `model.config`, which contains lots of useful information about the model (e.g. number of heads and layers, size of hidden layers, etc.). You can access this with `model.config`. Run the code below to see this in action, and to define some useful variables for later.
+
+<details>
+<summary>GPU memory requirements</summary>
+
+GPT-J in bfloat16 takes about 12GB. On a GPU with less than 23 GiB (e.g. Colab's 16GB T4), the variable `LOW_GPU_MEM` below is set to `True` automatically. The only thing it changes is that section 3's head-by-head sweep runs one layer per forward pass instead of four, so it fits in 16GB (the results are the same, it's just slower).
+
+</details>
 '''
 
 # ! CELL TYPE: code
 # ! FILTERS: []
 # ! TAGS: [main]
+
+# LOW_GPU_MEM fires automatically on GPUs with less than 23 GiB (e.g. Colab's 16GB T4), or with no CUDA GPU at all.
+LOW_GPU_MEM = not t.cuda.is_available() or t.cuda.get_device_properties(0).total_memory / (1024**3) < 23
+print(f"{LOW_GPU_MEM=}")
 
 model = LanguageModel("EleutherAI/gpt-j-6b", device_map="auto", dtype=t.bfloat16)
 tokenizer = model.tokenizer
@@ -373,8 +339,11 @@ A model comes with a tokenizer, accessible with `model.tokenizer` (just like Tra
     * This takes in tokens, and returns the decoded string.
     * If the input is an integer, it returns the corresponding string. If the input is a list / 1D array of integers, it returns all those strings concatenated (which can sometimes not be what you want).
 * `tokenizer.batch_decode`
-    * Equivalent to `tokenizer.decode`, but it doesn't concatenate.
-    * If the input is a list / 1D integer array, it returns a list of strings. If the input is 2D, it will concatenate within each list.
+    * Equivalent to `tokenizer.decode`, but applied to a batch of sequences: the input should be 2D (a list of lists / 2D array), and it returns one string per row (concatenating within each row).
+    * To get one string per token from a 1D list / array of token IDs, add a dimension first, e.g. `tokenizer.batch_decode(token_ids.unsqueeze(-1))` for a tensor, or `tokenizer.batch_decode([[tok] for tok in token_ids])` for a list. (A flat 1D input is treated as a *single* sequence and gives one concatenated string, just like `decode`.)
+FILTERS: ~
+<!-- transformers>=5 changed batch_decode so a flat 1D input is decoded as one sequence, not one string per token. -->
+END FILTERS
 * `tokenizer.tokenize`
     * Takes in a string, and returns a list of strings.
 
@@ -392,8 +361,11 @@ print(tokenizer("This must be Thursday", return_tensors="pt"))
 # Decoding a list of integers, into a concatenated string.
 print(tokenizer.decode([40, 1239, 714, 651, 262, 8181, 286, 48971, 12545, 13]))
 
-# Using batch decode, on both 1D and 2D input.
-print(tokenizer.batch_decode([4711, 2456, 481, 307, 6626, 510]))
+# Using batch decode, on 2D input: one string per row. To split tokens individually, make each token its own row.
+# FILTERS: ~
+# In transformers>=5, a flat 1D list is decoded as a single sequence.
+# END FILTERS
+print(tokenizer.batch_decode([[4711], [2456], [481], [307], [6626], [510]]))
 print(tokenizer.batch_decode([[1212, 6827, 481, 307, 1978], [2396, 481, 428, 530]]))
 
 # Split sentence into tokens (note we see the special Ġ character in place of prepended spaces).
@@ -530,9 +502,102 @@ During processing of the intervention computational graph we are building, when 
 </details>
 
 <details>
-<summary>Optional exercise - we mentioned that <code>.output</code> returns a tuple of 2 tensors. Can you use the <a href="https://huggingface.co/transformers/v4.11.3/_modules/transformers/models/gptj/modeling_gptj.html">documentation page</a> to work out what the second tensor in this tuple is?</summary>
+<summary>Notes on remote execution (if using <code>REMOTE = True</code>)</summary>
 
-The second output is also a tuple of tensors, of length 2. In the GPT-J source code, they are called `present`. They represent the keys and values which were calculated in this forward pass (as opposed to those that were calculated in an earlier forward pass, and cached by the model). Since we're only generating one new token, these are just the full keys and values.
+With `REMOTE = True`, the code inside `with model.trace(...)` is sent to NDIF's 
+server and run there 
+([see nnsight docs](https://nnsight.net/features/15_remote_execution/#remote-execution-on-ndif)). 
+How does this work?
+
+When we send data to the NDIF server:
+
+- `nnsight` finds the variable names the block reads 
+  ([`_referenced_names`](https://github.com/ndif-team/nnsight/blob/v0.8.2/src/nnsight/intervention/serialization.py#L38)), 
+  looks up those variables in the function you're calling it from 
+  ([`RequestModel.serialize`](https://github.com/ndif-team/nnsight/blob/v0.8.2/src/nnsight/schema/request.py#L47)) 
+  and [pickles](https://docs.python.org/3/library/pickle.html) them. 
+  A class defined in your notebook is shipped by value and rebuilds fine, but a 
+  class imported from a module is pickled as a reference to that module, 
+  so ([the server needs the module too](https://nnsight.net/features/15_remote_execution/#running-your-own-code-on-the-server)). 
+- `nnsight` ships your local modules automatically ([`pull_env`](https://github.com/ndif-team/nnsight/blob/v0.8.2/src/nnsight/ndif.py#L522)), 
+   but its scan 
+   ([`get_local_env`](https://github.com/ndif-team/nnsight/blob/v0.8.2/src/nnsight/ndif.py#L491))
+   skips folders without an `__init__.py`, like ARENA's exercise folders. 
+   So an `ICLDataset` built by `tests.py` (class from `solutions.py`) fails 
+   on the server with `ModuleNotFoundError`. 
+-  The solution is to read plain data out before the block instead, 
+   e.g. `prompts = dataset.prompts`, and use `prompts` inside it.
+
+When we recieve data back, only objects that are ([saved](https://nnsight.net/features/15_remote_execution/#saving-results)) return. `nnsight` needs to know what computed results you actually want, otherwise
+we could be shipping back several (possibly large) intermediate variables that we don't want.
+
+- If you fill a container (e.g. a dict of results) inside the block, save the 
+  container itself with `nnsight.save(my_dict)`. 
+
+Local runs (`REMOTE = False`) work either way, so these mistakes only show up remotely. 
+To catch them without an NDIF key, use `model.trace(..., remote="local")`: 
+it serializes the block as a remote run would, and rebuilds it with your local modules hidden.
+
+</details>
+
+<details>
+<summary>Example: Remote nnsight per-token logprobs</summary>
+
+Say you want the logprobs for each token using a model far too big to run 
+locally, e.g. `Qwen/Qwen2.5-72B-Instruct`. The full logits have shape 
+`(batch, seq, d_vocab)`: for 32 sequences of 1024 tokens that's 
+~10 GB in bf16 (`d_vocab = 152064`). The per-token logprobs you want are 
+only `(batch, seq)`, ~130 KB. So compute them on the server and save only the small tensor:
+
+```python
+import nnsight
+from eindex import eindex
+
+big_model = LanguageModel("Qwen/Qwen2.5-72B-Instruct")  # downloads the config and tokenizer, not the weights
+
+# eindex isn't installed on NDIF's server, so send its source with each request
+nnsight.register("eindex")
+
+prompts = [
+    "The Eiffel Tower is located in the city of Paris.",
+    "Water boils at 100 degrees Celsius.",
+]
+# Tokenize locally, so we have the token ids to index with
+tokens = big_model.tokenizer(prompts, return_tensors="pt", padding=True)
+input_ids = tokens["input_ids"]
+
+with big_model.trace(dict(tokens), remote=True):
+    logits = big_model.lm_head.output  # (batch, seq, d_vocab), never leaves the server
+    logprobs = logits.float().log_softmax(dim=-1)
+    token_logprobs = eindex(logprobs, input_ids.to(logprobs.device), "b s [b s+1] -> b s").save()
+
+# Count a position only if the context token and the predicted token are both real (batches are left-padded)
+attn = tokens["attention_mask"].bool()
+mask = attn[:, :-1] & attn[:, 1:]
+print((token_logprobs * mask).sum(-1))  # total logprob of each prompt
+```
+
+- `logits` and `logprobs` aren't saved, so they're discarded on the server, avoiding downloading large intermediate tensors
+- We pass the tokenized batch to `trace` rather than the strings, so the server runs on exactly the token ids we index with.
+- `nnsight` left-pads batches, so the first real token of a shorter prompt is "predicted" from a pad token. That's why the mask needs both `attn[:, :-1]` and `attn[:, 1:]`.
+- The trace runs on NDIF, so every library it calls must be installed there or sent with the request. 
+  `nnsight.compare()` lists what the server has, [`nnsight.register(module)`](https://nnsight.net/documentation/ndif/) (a module or its name) sends a pure-Python module's source with each request; 
+  without it you get `ModuleNotFoundError: No module named 'eindex'`. 
+  This only works if nothing the module uses has to be imported on the server.
+- To try it without NDIF, swap in `Qwen/Qwen2.5-0.5B` (same tokenizer and module names) with `remote=False`.
+
+</details>
+
+<details>
+<summary>Optional exercise - we mentioned that <code>.output</code> returns a tuple of 2 tensors. Can you use the <a href="https://github.com/huggingface/transformers/blob/main/src/transformers/models/gptj/modeling_gptj.py">GPT-J source code</a> to work out what the second tensor in this tuple is?</summary>
+
+The second output is the **attention pattern** of that layer, i.e. `GPTJBlock.forward` returns `(hidden_states, attn_weights)`, where `attn_weights` has shape `(batch, n_heads, seq_len, seq_len)`. This is true whether or not caching is enabled (with the default eager attention implementation; other implementations such as flash-attention don't return the pattern).
+
+<details>
+<summary> Second output in older versions of <code>transformers</code>. </summary>
+
+In older versions of `transformers` e.g. [v4.11.3](https://huggingface.co/transformers/v4.11.3/_modules/transformers/models/gptj/modeling_gptj.html), the second output was instead `present`, a tuple of the keys and values computed in this forward pass. Newer versions store the key/value cache in a separate `Cache` object which is updated in place, so it's no longer returned by each block.)
+</details>
 
 </details>
 
@@ -575,8 +640,8 @@ r'''
 ### Exercise - visualize attention heads
 
 > ```yaml
-> Difficulty: 🔴🔴⚪⚪⚪
-> Importance: 🔵🔵🔵⚪⚪
+> Difficulty: 2
+> Importance: 3
 > 
 > You should spend up to 10-20 minutes on this exercise.
 > ```
@@ -656,7 +721,7 @@ if MAIN:
 # ! TAGS: [html,st-dropdown[Click to see the expected output]]
 
 r'''
-<div style="text-align: left"><embed src="https://info-arena.github.io/ARENA_img/misc/media-142/14201.html" width="1050" height="420"></div>
+<div style="text-align: left"><embed src="https://arena-education.github.io/ARENA_img/misc/media-142/14201.html" width="1050" height="420"></div>
 '''
 
 # ! CELL TYPE: markdown
@@ -746,8 +811,8 @@ r'''
 ### Exercise (optional) - generate your own antonym pairs
 
 > ```yaml
-> Difficulty: 🔴🔴🔴🔴⚪
-> Importance: 🔵🔵⚪⚪⚪
+> Difficulty: 4
+> Importance: 2
 > 
 > If you choose to do this exercise, you should spend up to 10-30 minutes on it - depending on your familiarity with the OpenAI Python API.
 > ```
@@ -757,7 +822,7 @@ We've provided you two options for the antonym dataset you'll use in these exerc
 1. Firstly, we've provided you a list of word pairs, in the file `data/antonym_pairs.txt`.
 2. Secondly, if you want to run experiments like the ones in this paper, it can be good practice to learn how to generate prompts from GPT-4 or other models (this is how we generated the data for this exercise).
 
-If you just want to use the provided list of words, skip this exercise and run the code below to load in the dataset from the text file. Alternatively, if you want to generate your own dataset, you can fill in the function `generate_dataset` below, which should query GPT-4 and get a list of antonym pairs.
+If you just want to use the provided list of words, skip this exercise and run the code below to load in the dataset from the text file. Alternatively, if you want to generate your own dataset (this needs an OpenAI API key), set `GENERATE_ANTONYM_DATASET = True` and fill in the function `generate_antonym_dataset` below, which should query GPT-4 and get a list of antonym pairs.
 
 See [here](https://platform.openai.com/docs/guides/gpt/chat-completions-api) for a guide to using the chat completions API, if you haven't already used it. Use the two dropdowns below (in order) for some guidance.
 
@@ -840,8 +905,10 @@ def generate_antonym_dataset(N: int):
     return response
 
 
+GENERATE_ANTONYM_DATASET = False  # set True to do this exercise (needs OPENAI_API_KEY)
+
 if MAIN:
-    if os.environ.get("OPENAI_API_KEY", None) is not None:
+    if GENERATE_ANTONYM_DATASET:
         ANTONYM_PAIRS = generate_antonym_dataset(100)
         # Save the word pairs in a text file
         with open(section_dir / "data" / "my_antonym_pairs.txt", "w") as f:
@@ -1147,7 +1214,7 @@ The most important function is `rich.print` (usually imported as `rprint`). This
 rprint("[green]This is green text[/], this is default color")
 ```
 
-<img src="https://raw.githubusercontent.com/info-arena/ARENA_img/main/misc/rprint-1.png" width="350">
+<img src="https://raw.githubusercontent.com/ARENA-education/ARENA_img/main/misc/rprint-1.png" width="350">
 
 and for making text bold / underlined:
 
@@ -1155,7 +1222,7 @@ and for making text bold / underlined:
 rprint("[u dark_orange]This is underlined[/], and [b cyan]this is bold[/].")
 ```
 
-<img src="https://raw.githubusercontent.com/info-arena/ARENA_img/main/misc/rprint-2.png" width="350">
+<img src="https://raw.githubusercontent.com/ARENA-education/ARENA_img/main/misc/rprint-2.png" width="350">
 
 It can also print tables:
 
@@ -1169,7 +1236,7 @@ table.add_row("B", "b")
 rprint(table)
 ```
 
-<img src="https://raw.githubusercontent.com/info-arena/ARENA_img/main/misc/rprint-3.png" width="150">
+<img src="https://raw.githubusercontent.com/ARENA-education/ARENA_img/main/misc/rprint-3.png" width="150">
 
 The text formatting (bold, underlined, colors, etc.) is also supported within table cells.
 
@@ -1192,8 +1259,8 @@ r'''
 ### Exercise - forward pass on antonym dataset
 
 > ```yaml
-> Difficulty: 🔴🔴⚪⚪⚪
-> Importance: 🔵🔵🔵⚪⚪
+> Difficulty: 2
+> Importance: 3
 > 
 > You should spend up to 10-15 minutes on this exercise.
 > ```
@@ -1203,7 +1270,7 @@ You should fill in the `calculate_h` function below. It should:
 * Run a forward pass on the model with the dataset prompts (i.e. the `.prompts` attribute), using the `nnsight` syntax we've demonstrated previously,
 * Return a tuple of the model's output (i.e. a list of its string-token completions, one for each prompt in the batch) and the residual stream value at the end of layer `layer` (e.g. if `layer = -1`, this means the final value of the residual stream before we convert into logits).
 
-<img src="https://raw.githubusercontent.com/info-arena/ARENA_img/main/misc/h-intervention-1.png" width="900">
+<img src="https://raw.githubusercontent.com/ARENA-education/ARENA_img/main/misc/h-intervention-1.png" width="900">
 
 You should only return the residual stream values for the very last sequence position in each prompt, i.e. the last `-1` token (where the model makes the antonym prediction), and same for the completions.
 
@@ -1251,7 +1318,11 @@ def calculate_h(model: LanguageModel, dataset: ICLDataset, layer: int = -1) -> t
         logits = model.lm_head.output[:, -1]
         next_tok_id = logits.argmax(dim=-1).save()
 
-    completions = model.tokenizer.batch_decode(next_tok_id)
+    # FILTERS: ~
+    # Unsqueeze so each token is its own row - in transformers>=5, batch_decode
+    # on a 1D tensor decodes it as one sequence (a single concatenated string) rather than one string per token
+    # END FILTERS
+    completions = model.tokenizer.batch_decode(next_tok_id.unsqueeze(-1))
     return completions, h
     # END SOLUTION
 
@@ -1399,8 +1470,8 @@ r'''
 ### Exercise - intervene with $h$
 
 > ```yaml
-> Difficulty: 🔴🔴🔴⚪⚪
-> Importance: 🔵🔵🔵🔵⚪
+> Difficulty: 3
+> Importance: 4
 > 
 > You should spend up to 10-15 minutes on this exercise.
 > ```
@@ -1414,9 +1485,12 @@ You should fill in the function `intervene_with_h` below. This will involve:
 
 The diagram below shows how all of this should work, when combined with the `calculate_h` function.
 
-<img src="https://raw.githubusercontent.com/info-arena/ARENA_img/main/misc/h-intervention-2.png" width="950">
+<img src="https://raw.githubusercontent.com/ARENA-education/ARENA_img/main/misc/h-intervention-2.png" width="950">
 
-Hint - you can use `tokenizer.batch_decode` to turn a list of tokens into a list of strings.
+Hint - you can use `tokenizer.batch_decode` to turn a list of tokens into a list of strings (remember to give it a 2D input, e.g. `tokens.unsqueeze(-1)`, so that each token is decoded separately).
+FILTERS: ~
+<!-- transformers>=5 batch_decode treats a flat 1D input as a single sequence. -->
+END FILTERS
 
 <details>
 <summary>Help - I'm not sure how best to get both the no-intervention and intervention completions.</summary>
@@ -1447,15 +1521,15 @@ def intervene_with_h(
     remote: bool = REMOTE,
 ) -> tuple[list[str], list[str]]:
     """
-    Extracts the vector `h` using previously defined function, and intervenes by adding `h` to the
-    residual stream of a set of generated zero-shot prompts.
+    Intervenes by adding the given `h`-vector to the residual stream (at the final sequence
+    position) of a set of zero-shot prompts.
 
     Inputs:
         model: the model we're using to generate completions
         zero_shot_dataset: the dataset of zero-shot prompts which we'll intervene on, using the
             `h`-vector
         h: the `h`-vector we'll be adding to the residual stream
-        layer: the layer we'll be extracting the `h`-vector from
+        layer: the layer at whose output we add the `h`-vector
         remote: whether to run the forward pass on the remote server (used for running test code)
 
     Returns:
@@ -1468,22 +1542,29 @@ def intervene_with_h(
     # raise NotImplementedError()
     # END EXERCISE
     # SOLUTION
+    # Read the prompts out of the dataset before the trace: on remote execution everything the trace body
+    # references is serialized and sent to the server, which can't unpickle an ICLDataset
+    prompts = zero_shot_dataset.prompts
+
     with model.trace(remote=remote) as tracer:
         # First, run a forward pass where we don't intervene, just save token id completions
-        with tracer.invoke(zero_shot_dataset.prompts):
+        with tracer.invoke(prompts):
             token_completions_zero_shot = model.lm_head.output[:, -1].argmax(dim=-1).save()
 
         # Next, run a forward pass on the zero-shot prompts where we do intervene
-        with tracer.invoke(zero_shot_dataset.prompts):
+        with tracer.invoke(prompts):
             # Add the h-vector to the residual stream, at the last sequence position
             hidden_states = model.transformer.h[layer].output[0]
-            hidden_states[:, -1] += h
+            hidden_states[:, -1] += h.to(hidden_states.device)
             # Also save completions
             token_completions_intervention = model.lm_head.output[:, -1].argmax(dim=-1).save()
 
     # Decode to get the string tokens
-    completions_zero_shot = model.tokenizer.batch_decode(token_completions_zero_shot)
-    completions_intervention = model.tokenizer.batch_decode(token_completions_intervention)
+    # FILTERS: ~
+    # Unsqueeze so each token is decoded separately (transformers>=5 batch_decode treats 1D input as one sequence)
+    # END FILTERS
+    completions_zero_shot = model.tokenizer.batch_decode(token_completions_zero_shot.unsqueeze(-1))
+    completions_intervention = model.tokenizer.batch_decode(token_completions_intervention.unsqueeze(-1))
 
     return completions_zero_shot, completions_intervention
     # END SOLUTION
@@ -1621,8 +1702,8 @@ r'''
 ### Exercise - combine the last two functions
 
 > ```yaml
-> Difficulty: 🔴🔴🔴⚪⚪
-> Importance: 🔵🔵🔵⚪⚪
+> Difficulty: 3
+> Importance: 3
 > 
 > You should spend up to 10-15 minutes on this exercise.
 > ```
@@ -1631,7 +1712,7 @@ One great feature of the `nnsight` library is its ability to parallelize forward
 
 In the code above, we had one function to extract the hidden states from the model, and another function where we intervened with those hidden states. But we can actually do both at once: we can compute $h$ within our forward pass, and then intervene with it on a different forward pass (using our zero-shot prompts), all within the same `model.trace` context manager. In other words, **we'll be using `with tracer.invoke...` three times** in this context manager.
 
-<img src="https://raw.githubusercontent.com/info-arena/ARENA_img/main/misc/h-intervention-3.png" width="1000">
+<img src="https://raw.githubusercontent.com/ARENA-education/ARENA_img/main/misc/h-intervention-3.png" width="1000">
 
 You should fill in the `calculate_h_and_intervene` function below, to do this. Mostly, this should involve combining your `calculate_h` and `intervene_with_h` functions, and wrapping the forward passes in the same context manager (plus a bit of code rewriting).
 
@@ -1641,6 +1722,8 @@ Your output should be exactly the same as before (since the `ICLDataset` class i
 <summary>Help - I'm not sure how to use the <code>h</code> vector inside the context manager.</summary>
 
 You extract `h` the same way as before, but you don't need to save it. It is kept as a proxy. You can still use it later in the context manager, just like it actually was a tensor.
+
+One gotcha: don't name this variable `h`. There's already a global variable `h` (from the `calculate_h` cell above), and when a name defined in one invoke and used in a later invoke collides with a global, nnsight can end up using the global value instead (giving wrong results, or a device mismatch error). Use a different name, e.g. `h_vec`.
 
 You shouldn't have to `.save()` anything inside your context manager, other than the token completions.
 
@@ -1690,20 +1773,26 @@ def calculate_h_and_intervene(
     # raise NotImplementedError()
     # END EXERCISE
     # SOLUTION
-    with model.trace(remote=REMOTE) as tracer:
-        with tracer.invoke(dataset.prompts):
-            h = model.transformer.h[layer].output[0][:, -1].mean(dim=0)
+    # Read the prompts out of the datasets before the trace (see intervene_with_h)
+    prompts, zero_shot_prompts = dataset.prompts, zero_shot_dataset.prompts
 
-        with tracer.invoke(zero_shot_dataset.prompts):
+    with model.trace(remote=REMOTE) as tracer:
+        with tracer.invoke(prompts):
+            h_vec = model.transformer.h[layer].output[0][:, -1].mean(dim=0)
+
+        with tracer.invoke(zero_shot_prompts):
             clean_tokens = model.lm_head.output[:, -1].argmax(dim=-1).save()
 
-        with tracer.invoke(zero_shot_dataset.prompts):
+        with tracer.invoke(zero_shot_prompts):
             hidden = model.transformer.h[layer].output[0]
-            hidden[:, -1] += h
+            hidden[:, -1] += h_vec
             intervene_tokens = model.lm_head.output[:, -1].argmax(dim=-1).save()
 
-    completions_zero_shot = tokenizer.batch_decode(clean_tokens)
-    completions_intervention = tokenizer.batch_decode(intervene_tokens)
+    # FILTERS: ~
+    # Unsqueeze so each token is decoded separately (transformers>=5 batch_decode treats 1D input as one sequence)
+    # END FILTERS
+    completions_zero_shot = tokenizer.batch_decode(clean_tokens.unsqueeze(-1))
+    completions_intervention = tokenizer.batch_decode(intervene_tokens.unsqueeze(-1))
     return completions_zero_shot, completions_intervention
     # END SOLUTION
 
@@ -1762,8 +1851,8 @@ r'''
 ### Exercise - compute change in accuracy
 
 > ```yaml
-> Difficulty: 🔴🔴⚪⚪⚪
-> Importance: 🔵🔵🔵⚪⚪
+> Difficulty: 2
+> Importance: 3
 > 
 > You should spend up to 10-20 minutes on this exercise.
 > ```
@@ -1821,20 +1910,24 @@ def calculate_h_and_intervene_logprobs(
     # SOLUTION
     correct_completion_ids = [toks[0] for toks in tokenizer(zero_shot_dataset.completions)["input_ids"]]
 
-    with model.trace(remote=REMOTE) as tracer:
-        with tracer.invoke(dataset.prompts):
-            h = model.transformer.h[layer].output[0][:, -1].mean(dim=0)
+    # Read the prompts out of the datasets before the trace (see intervene_with_h)
+    prompts, zero_shot_prompts = dataset.prompts, zero_shot_dataset.prompts
+    N = len(zero_shot_dataset)
 
-        with tracer.invoke(zero_shot_dataset.prompts):
+    with model.trace(remote=REMOTE) as tracer:
+        with tracer.invoke(prompts):
+            h_vec = model.transformer.h[layer].output[0][:, -1].mean(dim=0)
+
+        with tracer.invoke(zero_shot_prompts):
             clean_logprobs = model.lm_head.output.log_softmax(dim=-1)[
-                range(len(zero_shot_dataset)), -1, correct_completion_ids
+                range(N), -1, correct_completion_ids
             ].save()
 
-        with tracer.invoke(zero_shot_dataset.prompts):
+        with tracer.invoke(zero_shot_prompts):
             hidden = model.transformer.h[layer].output[0]
-            hidden[:, -1] += h
+            hidden[:, -1] += h_vec
             intervene_logprobs = model.lm_head.output.log_softmax(dim=-1)[
-                range(len(zero_shot_dataset)), -1, correct_completion_ids
+                range(N), -1, correct_completion_ids
             ].save()
 
     return clean_logprobs, intervene_logprobs
@@ -1973,7 +2066,7 @@ r'''
 
 First, a bit of a technical complication. Most HuggingFace models don't have the nice attention head representations. What we have is the linear layer `out_proj` which implicitly combines the "projection per attention head" and the "sum over attention head" operations (if you can't see how this is possible, see the section "Attention Heads are Independent and Additive" from Anthropic's [Mathematical Framework](https://transformer-circuits.pub/2021/framework/index.html)).
 
-<img src="https://raw.githubusercontent.com/info-arena/ARENA_img/main/misc/rearrange-output-2.png" width="950">
+<img src="https://raw.githubusercontent.com/ARENA-education/ARENA_img/main/misc/rearrange-output-2.png" width="950">
 
 This presents some questions for us, when it comes to causal interventions on attention heads. Use the dropdowns below to read the answers to these questions (they'll be important for the coming exercises).
 
@@ -2026,7 +2119,7 @@ attn_head_output = out_proj(z_ablated).save()
 
 Illustration:
 
-<img src="https://raw.githubusercontent.com/info-arena/ARENA_img/main/misc/rearrange-output-ablated-2.png" width="950">
+<img src="https://raw.githubusercontent.com/ARENA-education/ARENA_img/main/misc/rearrange-output-ablated-2.png" width="950">
 
 Note - this would actually fail if `out_proj` had a bias, because we want to just get an attention head's output, not the bias term as well. But if you look at the [documentation page](https://huggingface.co/transformers/v4.11.3/_modules/transformers/models/gptj/modeling_gptj.html) you'll see that `out_proj` doesn't have a bias term, so we're all good!
 
@@ -2041,8 +2134,8 @@ r'''
 ### Exercise - implement `calculate_fn_vectors_and_intervene`
 
 > ```yaml
-> Difficulty: 🔴🔴🔴🔴🔴
-> Importance: 🔵🔵🔵🔵🔵
+> Difficulty: 5
+> Importance: 5
 > 
 > You should spend up to 30-60 minutes on this exercise.
 > ```
@@ -2054,7 +2147,7 @@ This is probably the most important function in today's exercises. Implementing 
 * Rather than your 2 different datasets being (dataset, zero-shot dataset), your two datasets will be (dataset, corrupted version of that same dataset).
     * You can use the method `create_corrupted_dataset` method of the `ICLDataset` class for this.
 
-<img src="https://raw.githubusercontent.com/info-arena/ARENA_img/main/misc/cie-intervention.png" width="1200">
+<img src="https://raw.githubusercontent.com/ARENA-education/ARENA_img/main/misc/cie-intervention.png" width="1200">
 
 Before you actually start writing the code, it might be helpful to answer the following:
 
@@ -2074,7 +2167,7 @@ You'll need `(N_LAYERS * N_HEADS) + 2`. To explain:
 
 You don't need to `.save()` the function vectors you're extracting from the model's internals, because these will only be used for causal interventions within the context manager.
 
-The only thing you need to save is the correct token logprobs for (1) the corrupted forward pass where we don't intervene, and (2) each corrupted forward pass where we do intervene on one of the heads. In other words, you'll need to save `(N_LAYERS * N_HEADS) + 1` tensors in total.
+The only thing you need to save is the correct token logprobs for (1) the corrupted forward pass where we don't intervene, and (2) each corrupted forward pass where we do intervene on one of the heads. In other words, you'll need to save `(N_LAYERS * N_HEADS) + 1` tensors in total. If you collect them in a dict inside the trace, also save the dict itself (`nnsight.save(my_dict)`), or it comes back empty when running remotely.
 
 </details>
 
@@ -2124,10 +2217,18 @@ def calculate_fn_vectors_and_intervene(
     # Get correct token ids, so we can get correct token logprobs
     correct_completion_ids = [toks[0] for toks in tokenizer(dataset.completions)["input_ids"]]
 
+    # We create this dict outside the trace and mark it with `nnsight.save` at the end of the trace: only objects
+    # that were themselves passed to `save` are sent back from (remote) execution, and saving the dict's entries
+    # marks the tensors, not the dict, which would otherwise come back empty
+    correct_logprobs_dict = {}
+
+    # Read the prompts out of the datasets before the trace (see intervene_with_h)
+    prompts, corrupted_prompts = dataset.prompts, corrupted_dataset.prompts
+
     with model.trace(remote=REMOTE) as tracer:
         # Run a forward pass on clean prompts, where we store attention head outputs
         z_dict = {}
-        with tracer.invoke(dataset.prompts):
+        with tracer.invoke(prompts):
             for layer in layers:
                 # Get hidden states, reshape to get head dimension, store the mean tensor
                 z = model.transformer.h[layer].attn.out_proj.input[:, -1]
@@ -2137,16 +2238,15 @@ def calculate_fn_vectors_and_intervene(
 
         # Run a forward pass on corrupted prompts, where we don't intervene or store activations (just so we can get the
         # correct-token logprobs to compare with our intervention)
-        with tracer.invoke(corrupted_dataset.prompts):
+        with tracer.invoke(corrupted_prompts):
             logits = model.lm_head.output[:, -1]
             correct_logprobs_corrupted = logits.log_softmax(dim=-1)[t.arange(N), correct_completion_ids].save()
 
         # For each head, run a forward pass on corrupted prompts (here we need multiple different forward passes, since
         # we're doing different interventions each time)
-        correct_logprobs_dict = {}
         for layer in layers:
             for head in heads:
-                with tracer.invoke(corrupted_dataset.prompts):
+                with tracer.invoke(corrupted_prompts):
                     # Get hidden states, reshape to get head dimension, then set it to the a-vector
                     z = model.transformer.h[layer].attn.out_proj.input[:, -1]
                     z.reshape(N, N_HEADS, D_HEAD)[:, head] = z_dict[(layer, head)]
@@ -2155,6 +2255,8 @@ def calculate_fn_vectors_and_intervene(
                     correct_logprobs_dict[(layer, head)] = logits.log_softmax(dim=-1)[
                         t.arange(N), correct_completion_ids
                     ].save()
+
+        nnsight.save(correct_logprobs_dict)
 
     # Get difference between intervention logprobs and corrupted logprobs, and take mean over batch dim
     all_correct_logprobs_intervention = einops.rearrange(
@@ -2189,12 +2291,16 @@ def batch_process_layers(n_layers, batch_size):
     for i in range(0, n_layers, batch_size):
         yield range(n_layers)[i : i + batch_size]
 
+# ! CELL TYPE: code
+# ! FILTERS: []
+# ! TAGS: [main]
 
 results = t.empty((0, N_HEADS), device=device)
 
 # If this fails to run, you should reduce the batch size so the forward passes are split up more, or
 # reduce dataset size
-for layers in batch_process_layers(N_LAYERS, batch_size=4):
+# NDIF caps each job's GPU memory (~17 GiB), and 4 layers at once exceeds it
+for layers in batch_process_layers(N_LAYERS, batch_size=1 if (LOW_GPU_MEM or REMOTE) else 4):
     print(f"Computing layers in {layers} ...")
     t0 = time.time()
     results = t.concat([results, calculate_fn_vectors_and_intervene(model, dataset, layers).to(device)])
@@ -2221,7 +2327,7 @@ imshow(
 #     aspect="equal",
 #     return_fig=True,
 # )
-# fig.write_html(section_dir / "14202.html")
+# fig.write_html(section_dir / "14202.html", include_plotlyjs="cdn")
 # END FILTERS
 
 # ! CELL TYPE: markdown
@@ -2229,7 +2335,7 @@ imshow(
 # ! TAGS: [html,st-dropdown[Click to see the expected output]]
 
 r'''
-<div style="text-align: left"><embed src="https://info-arena.github.io/ARENA_img/misc/media-142/14202.html" width="1020" height="620"></div>
+<div style="text-align: left"><embed src="https://arena-education.github.io/ARENA_img/misc/media-142/14202.html" width="1020" height="620"></div>
 '''
 
 # ! CELL TYPE: code
@@ -2253,8 +2359,8 @@ r'''
 ### Exercise - calculate the function vector
 
 > ```yaml
-> Difficulty: 🔴🔴🔴🔴🔴
-> Importance: 🔵🔵🔵⚪⚪
+> Difficulty: 5
+> Importance: 3
 > 
 > You should spend up to 25-50 minutes on this exercise.
 > ```
@@ -2295,9 +2401,8 @@ def calculate_fn_vector(
     for layer, head in head_list:
         head_dict[layer].add(head)
 
-    fn_vector_list = []
-
     with model.trace(dataset.prompts, remote=REMOTE):
+        fn_vector_list = []
         for layer, head_list in head_dict.items():
             # Get the output projection layer
             out_proj = model.transformer.h[layer].attn.out_proj
@@ -2315,10 +2420,10 @@ def calculate_fn_vector(
             # Now that we've zeroed all unimportant heads, get the output & add it to the list
             # (we need a single batch dimension so we can use `out_proj`)
             out_proj_output = out_proj(hidden_states.unsqueeze(0)).squeeze()
-            fn_vector_list.append(out_proj_output.save())
+            fn_vector_list.append(out_proj_output)
 
-    # We sum all attention head outputs to get our function vector
-    fn_vector = sum([v for v in fn_vector_list])
+        # We sum all attention head outputs to get our function vector
+        fn_vector = sum(fn_vector_list).detach().save()
 
     assert fn_vector.shape == (D_MODEL,)
     return fn_vector
@@ -2339,7 +2444,7 @@ r'''
 
 We're now going to replicate some of the results in Table 3, in the paper:
 
-<img src="https://raw.githubusercontent.com/info-arena/ARENA_img/main/misc/tab3.png" width="700">
+<img src="https://raw.githubusercontent.com/ARENA-education/ARENA_img/main/misc/tab3.png" width="700">
 
 This will involve doing something we haven't done before - **intervening on multi-token prompt generation**.
 
@@ -2366,21 +2471,21 @@ But for multi-token generation, we'll be using the `generate` method rather than
 
 ```python
 # Single invoke
-with model.generate(prompt, remote=REMOTE, max_new_tokens=max_new_tokens):
-    for n in range(max_new_tokens):
-        ... # Intervene on fwd pass for n-th token to be generated
-        model.next()
+with model.generate(prompt, remote=REMOTE, max_new_tokens=max_new_tokens) as tracer:
+    for step in tracer.iter[:max_new_tokens]:
+        ... # Intervene on fwd pass for step-th token to be generated
 
 # Multiple invokes
-with model.generate(max_new_tokens=max_new_tokens, remote=REMOTE) as generator:
-    with generator.invoke(prompt):
+with model.generate(max_new_tokens=max_new_tokens, remote=REMOTE) as tracer:
+    with tracer.invoke(prompt):
 
-        for n in range(max_new_tokens):
-            ... # Intervene on fwd pass for n-th token to be generated
-            model.next()
+        for step in tracer.iter[:max_new_tokens]:
+            ... # Intervene on fwd pass for step-th token to be generated
 ```
 
-The line `model.next()` denotes that the following interventions should be applied to the forward pass which generates the *next* token.
+The loop `for step in tracer.iter[...]` denotes that the interventions inside it should be applied to every forward pass (i.e. every generation step) in the given range, rather than just the first one. `tracer.all()` is shorthand for `tracer.iter[:]`, i.e. every generation step. Any code after the loop (e.g. `model.generator.output.save()`) runs just once, as normal.
+
+One catch for remote execution: anything you save after a `for _ in tracer.all():` loop doesn't come back from the server. Loop over a fixed range such as `tracer.iter[:max_new_tokens]` instead, as above.
 
 Mostly, everything you learned during single-token generation generalizes to the multi-token case. For example, using `.save()` still saves proxies outside the context managers (although make sure that you don't use the same variable names over different generations, otherwise you'll overwrite them - it's easier to store your saved proxies in e.g. a list or dict).
 
@@ -2395,13 +2500,13 @@ Here are a few quick optional questions to test your understanding of how multi-
 <summary>How do I add vector <code>h</code> to all the tokens in the original prompt but not to the generated tokens? </summary>
 
 ```python
-with model.generate(max_new_tokens=max_new_tokens, remote=REMOTE) as generator:
-    with generator.invoke(prompt):
+with model.generate(max_new_tokens=max_new_tokens, remote=REMOTE) as tracer:
+    with tracer.invoke(prompt):
         # Add vectors to the model's internals on the first forward pass
         model.transformer.h[layer].output[0][:, :seq_len] += h
 
 ```
-You don't have to call `model.next()` because you're only adding the vector once to tokens in the original prompt. This will be cached when the model is subsequently generating tokens.
+You don't have to loop over generation steps (with `tracer.iter` or `tracer.all()`), because interventions outside such a loop only apply to the first forward pass, i.e. the one over the original prompt. The result will be cached when the model is subsequently generating tokens.
 
 </details>
 
@@ -2410,17 +2515,14 @@ You don't have to call `model.next()` because you're only adding the vector once
 
 To intervene during the generation of the first `k` generated tokens:
 ```python
-with model.generate(max_new_tokens=max_new_tokens, remote=REMOTE) as generator:
-    with generator.invoke(prompt):
+with model.generate(max_new_tokens=max_new_tokens, remote=REMOTE) as tracer:
+    with tracer.invoke(prompt):
 
-        for n in range(k+1):
-            # Add vector to the model's internals, on the k-th forward pass
-            model.transformer.h[layer].output[0] += h
-            model.next()
+        for step in tracer.iter[:k]:
+            # Add vector to the model's internals, on each of the first k forward passes
+            model.transformer.h[layer].output[0][:] += h
 ```
-When `n=0`, you are adding to tokens in the original prompt before a new token is a generated. After calling `model.next()`, you are accessing the hidden state of the last token that was generated (with seq_len=1).
-
-</details>
+When `step=0`, you are adding to tokens in the original prompt before a new token is generated. On later steps, you are accessing the hidden state of the last token that was generated (with seq_len=1, because of caching). Note that we need `output[0][:] += h` rather than `output[0] += h`, because `output` is a tuple and the latter would try to assign to one of its elements.
 
 </details>
 
@@ -2428,27 +2530,24 @@ When `n=0`, you are adding to tokens in the original prompt before a new token i
 <summary>How do I intervene with vector <code>h</code> only during the generation of the first k tokens, but not to tokens in the original prompt before the first generated token? </summary>
 
 ```python
-with model.generate(max_new_tokens=max_new_tokens, remote=REMOTE) as generator:
-    with generator.invoke(prompt):
+with model.generate(max_new_tokens=max_new_tokens, remote=REMOTE) as tracer:
+    with tracer.invoke(prompt):
 
-        for n in range(k+1):
-            model.next()
-            # Add vector AFTER calling model.next() to add to the token that just got generated
-            model.transformer.h[layer].output[0] += h
+        for step in tracer.iter[1 : k + 1]:
+            # Start from step 1 (not 0) to only add to tokens that just got generated
+            model.transformer.h[layer].output[0][:] += h
 
 ```
-By not adding things before `model.next()`, we never add to the original prompt but always after a new token has been generated.
-
-</details>
+By skipping step 0 (the forward pass over the original prompt), we never add to the original prompt but always to a newly generated token.
 
 </details>
 
 <details>
-<summary>What is the difference between adding vector <code>h</code> before and after vector <code>model.next()</code>? </summary>
+<summary>What is the difference between intervening in <code>tracer.iter[:k]</code> and <code>tracer.iter[1:k+1]</code>? </summary>
 
-As explained in Q3, adding vector before `model.next()` means the operation is always done to the current sequence **before** a new generated token is appended. Adding vector after `model.next()` means the operation is always done to the newly generated token.
+As explained in Q3, step 0 is the forward pass over the original prompt, so `tracer.iter[:k]` includes adding to the prompt tokens (before any new token is generated). `tracer.iter[1:k+1]` skips step 0, so the operation is always done to a newly generated token.
 
-</details> -->
+</details>
 
 ### Key-Value Caching
 
@@ -2478,8 +2577,8 @@ r'''
 ### Exercise - intervene with function vector, in multi-token generation
 
 > ```yaml
-> Difficulty: 🔴🔴🔴🔴⚪
-> Importance: 🔵🔵🔵🔵⚪
+> Difficulty: 4
+> Importance: 4
 > 
 > You should spend up to 15-30 minutes on this exercise.
 > ```
@@ -2487,6 +2586,8 @@ r'''
 You should now fill in the function `intervene_with_fn_vector` below. This will take a function vector (calculated from the function you wrote above), as well as a few other arguments (see docstring), and return the model's string completion on the given prompt template.
 
 We hope to observe results qualitatively like the ones in Table 3, i.e. having the model define a particular word as its antonym.
+
+If you run this remotely, loop over `tracer.iter[:n_tokens]` rather than `tracer.all()` (see the note on `tracer.iter` above), so that what you save after the loop comes back.
 '''
 
 # ! CELL TYPE: code
@@ -2531,14 +2632,17 @@ def intervene_with_fn_vector(
     # SOLUTION
     prompt = prompt_template.format(x=word)
 
-    with model.generate(remote=REMOTE, max_new_tokens=n_tokens, repetition_penalty=1.2) as generator:
-        with model.all():
-            with generator.invoke(prompt):
-                tokens = model.generator.output.save()
+    with model.generate(remote=REMOTE, max_new_tokens=n_tokens, repetition_penalty=1.2) as tracer:
+        with tracer.invoke(prompt):
+            tokens = model.generator.output.save()
 
-            with generator.invoke(prompt):
-                model.transformer.h[layer].output[0][:, -1] += fn_vector
-                tokens_intervention = model.generator.output.save()
+        with tracer.invoke(prompt):
+            # Intervene on every generation step (same pattern as the multi-token generation examples above). A save
+            # placed after a `for _ in tracer.all():` block doesn't come back from remote execution on nnsight 0.8
+            for step in tracer.iter[:n_tokens]:
+                hidden = model.transformer.h[layer].output[0]
+                hidden[:, -1] += fn_vector.to(hidden.device)
+            tokens_intervention = model.generator.output.save()
 
     completion, completion_intervention = tokenizer.batch_decode(
         [tokens.squeeze().tolist(), tokens_intervention.squeeze().tolist()]
@@ -2619,8 +2723,8 @@ r'''
 ### Exercise - generalize results to another task (optional)
 
 > ```yaml
-> Difficulty: 🔴🔴🔴🔴⚪
-> Importance: 🔵🔵🔵⚪⚪
+> Difficulty: 4
+> Importance: 3
 > 
 > You should spend up to 15-30 minutes on this exercise.
 > ```
@@ -2709,7 +2813,7 @@ r'''
 # ! TAGS: []
 
 r'''
-**Note**: GPT2-XL is not hosted remotely by NNsight at the moment. If you use GPT2-XL, we recommend setting `REMOTE = False`. Otherwise, you can use one of the remotely hosted models (see [here](https://nnsight.net/status/)) and set `REMOTE = True`. You might want to run `del model` and `gc.collect()` before loading in a new model, to free up memory.
+**Note**: GPT2-XL is not hosted remotely by NNsight at the moment. If you use GPT2-XL, we recommend setting `REMOTE = False`. Otherwise, you can use one of the remotely hosted models (see [here](https://nnsight.net/status/)) and set `REMOTE = True`. Before loading GPT2-XL we free GPT-J with `del model`.
 '''
 
 # ! CELL TYPE: markdown
@@ -2753,7 +2857,14 @@ First, we'll load in GPT2-XL, then we'll replicate some of the examples in the m
 # ! FILTERS: []
 # ! TAGS: [main]
 
-gpt2_xl = LanguageModel("gpt2-xl", device_map="auto", torch_dtype=t.bfloat16)
+import gc
+
+if "model" in globals():
+    del model
+gc.collect()
+t.cuda.empty_cache()
+
+gpt2_xl = LanguageModel("openai-community/gpt2-xl", device_map="auto", dtype=t.bfloat16)
 tokenizer = gpt2_xl.tokenizer
 
 REMOTE = False
@@ -2768,8 +2879,8 @@ r'''
 ### Exercise - replicate the steering vector results
 
 > ```yaml
-> Difficulty: 🔴🔴🔴🔴🔴
-> Importance: 🔵🔵🔵🔵⚪
+> Difficulty: 5
+> Importance: 4
 > 
 > You should spend up to 30-50 minutes on this exercise.
 > ```
@@ -2782,7 +2893,7 @@ This is the last exercise in this set, and hopefully it'll provide an opportunit
 
 ### Caching
 
-This is a different kind of causal intervention than we performed in previous sections. Rather than adding a single vector to the final sequence position at each token generation, we're adding a slice of vectors to the first sequence positions of the original prompt (see tables like in [this section](https://www.lesswrong.com/posts/5spBue2z2tw4JuDCx/steering-gpt-2-xl-by-adding-an-activation-vector#1__Love___Hate) for an illustration). How do you think this will affect our function? Should we still cache? Should we be using `.generate()` or `.trace()`? If using `.generate()`, do we need to call `model.next()` ?
+This is a different kind of causal intervention than we performed in previous sections. Rather than adding a single vector to the final sequence position at each token generation, we're adding a slice of vectors to the first sequence positions of the original prompt (see tables like in [this section](https://www.lesswrong.com/posts/5spBue2z2tw4JuDCx/steering-gpt-2-xl-by-adding-an-activation-vector#1__Love___Hate) for an illustration). How do you think this will affect our function? Should we still cache? Should we be using `.generate()` or `.trace()`? If using `.generate()`, do we need to loop over generation steps with `tracer.iter` or `tracer.all()`?
 
 <details>
 <summary>Click this dropdown for answers to the questions above.</summary>
@@ -2791,7 +2902,7 @@ Rather than adding to each final sequence position for every token generated, we
 
 - We can still use caching (because the values we cache shouldn't be different in subsequent token generations),
 - We should be using `.generate()` (because we're doing multi-token generation),
-- We don't need to call `model.next()` (because we only intervene once, and our intervention will be cached & applied to all subsequent tokens which are generated).
+- We don't need to loop over generation steps with `tracer.iter` or `tracer.all()` (because we only intervene once, and our intervention will be cached & applied to all subsequent tokens which are generated).
 
 Again, if any of this is confusing then please ask a TA or message in the Slack channel.
 
@@ -2823,6 +2934,9 @@ We apply these sampling methods by passing keyword arguments into the `generate`
 Note that the sequences are generated stochastically rather than greedily - this means we'll get different results if we input multiple different copies of the same sequence. We've given you the `n_comparisons` argument in the function below, i.e. you should generate this many steered *and* this many unsteered completions.
 
 ### Other tips / notes
+
+<!-- transformers>=5 (required by TransformerLens 3.9) returns a plain tensor from GPT-2 blocks, so the `.output[0]` idiom used for GPT-J above would silently select batch element 0. -->
+**Important:** the post extracts and adds activations at the residual stream *before* layer `layer` (TransformerLens' `blocks.{layer}.hook_resid_pre`), i.e. the input to block `layer`. So use `model.transformer.h[layer].input` (shape `(batch, seq_len, d_model)`), not `.output` (which is the residual stream before layer `layer + 1`). Also note that unlike GPT-J, GPT2-XL's transformer blocks return their hidden states as a plain tensor (not a tuple), so if you ever use `.output` on them, don't write `.output[0]` - otherwise you'll silently index into the first batch element!
 
 We recommend starting with example #9 (the "talking about weddings" one). It seems quite robust to the exact conditions of the forward pass, unlike the `Love - Hate` example. You can use any of the template cells we've given you below.
 
@@ -2906,8 +3020,15 @@ def calculate_and_apply_steering_vector(
         with generator.invoke(act_add_prompts):
             # Get all the prompts from the activation additions, and put them in a list
             # (note, we slice from the end of the sequence because of left-padding)
+            # FILTERS: ~
+            # We use `.input` (the residual stream before block `layer`, i.e. `hook_resid_pre`), matching the post's
+            # layer numbering. Note `.output` would be one layer later, and in transformers>=5 (required by
+            # TransformerLens 3.9) GPT-2 blocks return the hidden states as a plain tensor rather than a tuple (unlike
+            # GPT-J earlier, which still returns a tuple), so writing `.output[0]` would silently index into batch
+            # element 0!
+            # END FILTERS
             act_add_vectors = [
-                model.transformer.h[layer].output[0][i, -seq_len:]
+                model.transformer.h[layer].input[i, -seq_len:]
                 for i, (layer, seq_len) in enumerate(zip(act_add_layers, act_add_seq_lens))
             ]
 
@@ -2920,16 +3041,20 @@ def calculate_and_apply_steering_vector(
         with generator.invoke(steered_prompts):
             # For each act_add prompt, add the vector to residual stream, at the start of the seq
             for i, (layer, coeff, seq_len) in enumerate(zip(act_add_layers, act_add_coeffs, act_add_seq_lens)):
-                model.transformer.h[layer].output[0][:, :seq_len] += coeff * act_add_vectors[i]
+                model.transformer.h[layer].input[:, :seq_len] += coeff * act_add_vectors[i]
             steered_out = model.generator.output.save()
 
-    # Decode steered & unsteered completions (discarding the sequences we only used for extracting
-    # activations) & return results
-    unsteered_completions = tokenizer.batch_decode(unsteered_out[-n_comparisons:])
-    steered_completions = tokenizer.batch_decode(steered_out[-n_comparisons:])
+    unsteered_completions = tokenizer.batch_decode(unsteered_out)
+    steered_completions = tokenizer.batch_decode(steered_out)
 
     return unsteered_completions, steered_completions
     # END SOLUTION
+
+
+# HIDE
+if MAIN:
+    tests.test_calculate_and_apply_steering_vector(calculate_and_apply_steering_vector, gpt2_xl)
+# END HIDE
 
 # ! CELL TYPE: markdown
 # ! FILTERS: []
@@ -3142,14 +3267,34 @@ An interesting extension - what happens if you take a task like the Country-Capi
 # ! FILTERS: []
 # ! TAGS: [main]
 
+import gc
+
+if "gpt2_xl" in globals():
+    del gpt2_xl
+gc.collect()
+t.cuda.empty_cache()
+
+model = LanguageModel("EleutherAI/gpt-j-6b", device_map="auto", dtype=t.bfloat16)
+tokenizer = model.tokenizer
+# nnsight only loads the real weights when you first run a trace; we call `model._model.lm_head` directly (outside a
+# trace), so load them now. Note this loads GPT-J locally even if REMOTE=True.
+model.dispatch()
+
+# ! CELL TYPE: code
+# ! FILTERS: []
+# ! TAGS: [main]
+
 # EXERCISE
 # # YOUR CODE HERE - find the decoded vocabulary
 # END EXERCISE
 # SOLUTION
 # Code to calculate decoded vocabulary:
 logits = model._model.lm_head(fn_vector)
-max_logits = logits.topk(20).indices.tolist()
-tokens = model.tokenizer.batch_decode(max_logits)
+max_logits = logits.topk(20).indices
+# FILTERS: ~
+# Unsqueeze so each token is its own row - in transformers>=5, batch_decode treats a flat 1D input as a single sequence
+# END FILTERS
+tokens = model.tokenizer.batch_decode(max_logits.unsqueeze(-1))
 print("Top logits:\n" + "\n".join(map(repr, tokens)))
 # END SOLUTION
 
